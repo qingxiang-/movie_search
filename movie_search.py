@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-电影 Magnet Link 搜索工具
-使用 Playwright 无头浏览器搜索电影并提取 magnet link
+电影 Magnet Link 搜索工具 - LLM 智能导航版
+使用 LLM 指导浏览器操作，智能搜索并提取 magnet link
 """
 
 import os
 import re
 import json
 import asyncio
-from typing import List, Optional
-from urllib.parse import quote
+from typing import List, Optional, Dict, Any
+from urllib.parse import quote, urljoin
+from bs4 import BeautifulSoup
 
 from playwright.async_api import async_playwright, Page
 import httpx
 from dotenv import load_dotenv
+
+from prompts import get_planning_prompt, get_analysis_prompt
 
 # 加载 .env 文件
 load_dotenv()
@@ -25,22 +28,30 @@ DASHSCOPE_MODEL = os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
 
 
 class MovieSearcher:
-    """电影 magnet link 搜索器"""
+    """LLM 智能导航的电影 magnet link 搜索器"""
 
-    # 通用搜索引擎（用于搜索 magnet links）
+    # 通用搜索引擎（优化用于 magnet/torrent 搜索）
     SEARCH_ENGINES = [
-        "https://www.baidu.com/s?wd=",
-        "https://www.bing.com/search?q=",
+        {"name": "DuckDuckGo", "url": "https://duckduckgo.com/?q=", "query_param": "q"},
+        {"name": "Brave Search", "url": "https://search.brave.com/search?q=", "query_param": "q"},
+        {"name": "Bing", "url": "https://www.bing.com/search?q=", "query_param": "q"},
     ]
 
-    def __init__(self):
+    def __init__(self, max_iterations: int = 15, min_magnets: int = 5, max_retries: int = 3):
         self.http_client = httpx.AsyncClient(timeout=60.0)
+        self.max_iterations = max_iterations
+        self.min_magnets = min_magnets  # 参数化停止条件
+        self.max_retries = max_retries  # 重试次数
+        self.search_history = []
+        self.found_magnets = []
+        self.movie_name = ""  # 作为类变量，支持动态更新
+        self.current_engine_index = 0  # 当前使用的搜索引擎索引
 
     async def close(self):
         """关闭 HTTP 客户端"""
         await self.http_client.aclose()
 
-    async def call_qwen_api(self, messages: list) -> dict:
+    async def call_qwen_api(self, messages: list, temperature: float = 0.7) -> dict:
         """调用 Qwen API"""
         url = f"{DASHSCOPE_BASE_URL}/chat/completions"
         headers = {
@@ -50,7 +61,7 @@ class MovieSearcher:
         data = {
             "model": DASHSCOPE_MODEL,
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": temperature,
         }
 
         try:
@@ -61,229 +72,472 @@ class MovieSearcher:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def search_with_llm(self, movie_name: str, magnet_links: List[str]) -> dict:
-        """使用 LLM 分析搜索结果并选择最佳 magnet link"""
-        magnets_str = "\n".join([f"{i+1}. {m}" for i, m in enumerate(magnet_links[:10])])
+    def extract_page_content(self, html: str, max_length: int = 8000) -> str:
+        """提取页面核心内容，优先保留包含关键词的段落"""
+        soup = BeautifulSoup(html, 'html.parser')
 
-        prompt = f"""你是一个电影资源搜索助手。用户正在搜索电影: {movie_name}
+        # 移除脚本和样式
+        for script in soup(["script", "style", "noscript"]):
+            script.decompose()
 
-请分析以下搜索到的 magnet links，返回最佳选择：
-{magnets_str}
+        # 关键词列表
+        keywords = ['magnet', '磁力', '下载', '种子', 'torrent', 'bt', '电影', self.movie_name.lower()]
+        
+        # 提取所有段落
+        paragraphs = []
+        for tag in soup.find_all(['p', 'div', 'article', 'section']):
+            text = tag.get_text(strip=True)
+            if text and len(text) > 20:  # 过滤太短的段落
+                # 计算关键词权重
+                weight = sum(1 for kw in keywords if kw and kw in text.lower())
+                paragraphs.append((weight, text))
+        
+        # 按权重排序，优先保留相关内容
+        paragraphs.sort(key=lambda x: x[0], reverse=True)
+        
+        # 组合文本
+        combined_text = ' '.join(p[1] for p in paragraphs)
+        
+        # 如果没有段落，回退到全文本
+        if not combined_text:
+            combined_text = soup.get_text()
+            lines = (line.strip() for line in combined_text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            combined_text = ' '.join(chunk for chunk in chunks if chunk)
 
-选择标准：
-1. 种子健康度（Seeder 数量多）
-2. 文件大小合理
-3. 包含中英文名称匹配
-4. 视频质量高（如 1080p, 4K, BluRay 等）
+        # 限制长度，但尽量不截断关键信息
+        if len(combined_text) > max_length:
+            combined_text = combined_text[:max_length] + "..."
 
-请以 JSON 格式返回：
-{{
-    "best_match": "最匹配的 magnet link（完整链接）",
-    "reason": "选择理由",
-    "quality": "视频质量",
-    "size": "文件大小"
-}}
+        return combined_text
 
-如果没有找到合适的，返回：
-{{
-    "best_match": null,
-    "reason": "未找到合适资源"
-}}
-"""
+    def extract_magnet_links(self, page_text: str) -> List[str]:
+        """从页面文本中提取所有 magnet links"""
+        # 改进的正则：支持40位SHA-1和64位SHA-256，更精确匹配参数
+        magnet_pattern = r'magnet:\?xt=urn:btih:[a-fA-F0-9]{40}(?:&[^\s<>"\'\']+)*'
+        found = list(set(re.findall(magnet_pattern, page_text, re.IGNORECASE)))
 
-        messages = [{"role": "user", "content": prompt}]
-        result = await self.call_qwen_api(messages)
+        # 记录新发现的 magnet links
+        new_magnets = [m for m in found if m not in self.found_magnets]
+        if new_magnets:
+            self.found_magnets.extend(new_magnets)
+
+        return found
+
+    def extract_links(self, html: str, base_url: str, max_links: int = 15) -> List[Dict[str, str]]:
+        """提取页面中的关键链接"""
+        soup = BeautifulSoup(html, 'html.parser')
+        links = []
+
+        for a in soup.find_all('a', href=True):
+            if len(links) >= max_links:
+                break
+
+            href = a['href']
+            text = a.get_text(strip=True)
+
+            # 过滤掉无用链接
+            if not text or len(text) < 2:
+                continue
+            if href.startswith('javascript:') or href.startswith('#'):
+                continue
+            if href.startswith('//'):
+                href = 'https:' + href
+            elif not href.startswith('http'):
+                href = urljoin(base_url, href)
+
+            links.append({
+                "text": text[:100],  # 限制文本长度
+                "url": href
+            })
+
+        return links
+
+    async def plan_next_action(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """使用 LLM 规划下一步操作"""
+
+        # 添加累计发现的 magnet 数量和当前搜索引擎索引到上下文
+        context["found_magnets_count"] = len(self.found_magnets)
+        context["current_engine_index"] = self.current_engine_index
+
+        # 从配置文件获取系统提示
+        system_prompt = get_planning_prompt(context, self.SEARCH_ENGINES, self.max_iterations)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "请规划下一步操作"}
+        ]
+
+        result = await self.call_qwen_api(messages, temperature=0.7)
 
         if result["success"]:
             content = result["content"]
-            # 尝试解析 JSON
             try:
-                # 提取 JSON 部分（可能被 ```json 包围）
+                # 提取 JSON
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
                     content = content.split("```")[1].split("```")[0].strip()
 
-                analysis = json.loads(content)
-                return {"llm_analysis": analysis}
-            except json.JSONDecodeError:
-                return {"llm_analysis": {"best_match": None, "reason": "JSON 解析失败", "raw_response": content}}
+                decision = json.loads(content)
+                return {"success": True, "decision": decision}
+            except json.JSONDecodeError as e:
+                return {
+                    "success": False,
+                    "error": f"JSON 解析失败: {e}",
+                    "raw_response": content
+                }
         else:
-            return {"error": f"LLM 分析失败: {result['error']}"}
+            return {"success": False, "error": result["error"]}
 
-    def extract_magnet_links(self, page_text: str) -> List[str]:
-        """从页面文本中提取所有 magnet links"""
-        magnet_pattern = r'magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^<>\s]*'
-        return list(set(re.findall(magnet_pattern, page_text)))
+    async def _goto_with_retry(self, page: Page, url: str, timeout: int = 15000) -> bool:
+        """带重试机制的页面导航"""
+        for attempt in range(self.max_retries):
+            try:
+                await page.goto(url, timeout=timeout, wait_until="domcontentloaded")
+                await asyncio.sleep(2)
+                return True
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    print(f"⚠️  导航失败 (尝试 {attempt + 1}/{self.max_retries}): {str(e)[:50]}")
+                    await asyncio.sleep(1)
+                else:
+                    print(f"❌ 导航失败，已重试 {self.max_retries} 次: {str(e)[:50]}")
+                    return False
+        return False
 
-    async def search_site(self, page: Page, engine: str, movie_name: str) -> List[str]:
-        """在单个搜索引擎搜索"""
-        magnets = []
+    async def execute_action(self, page: Page, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """执行 LLM 规划的操作"""
+
+        action_type = action.get("action")
+        params = action.get("params", {})
+
+        print(f"\n📋 LLM 决策: {action.get('reason', action_type)}")
 
         try:
-            # 构造搜索 URL（搜索 movie name + magnet）
-            search_query = f"{quote(movie_name)} magnet"
-            search_url = f"{engine}{search_query}"
+            if action_type == "click_link":
+                link_index = params.get("link_index", 1) - 1
+                links = context.get("links", [])
 
-            print(f"正在访问: {search_url}")
-            await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
-
-            # 等待页面加载
-            await asyncio.sleep(2)
-
-            # 提取 magnet links
-            page_text = await page.content()
-            magnets = self.extract_magnet_links(page_text)
-
-            if magnets:
-                print(f"✓ 在 {engine} 找到 {len(magnets)} 个 magnet links")
-            else:
-                # 尝试点击搜索结果中的链接来获取 magnet
-                try:
-                    if "baidu.com" in engine:
-                        # 百度搜索结果选择器
-                        result_links = await page.locator('div.result a').all()
-                    elif "bing.com" in engine:
-                        # Bing 搜索结果选择器
-                        result_links = await page.locator('li.b_algo a').all()
+                if 0 <= link_index < len(links):
+                    target_url = links[link_index]["url"]
+                    link_text = links[link_index]['text'][:50]
+                    print(f"🔗 点击链接: {link_text}")
+                    print(f"   URL: {target_url}")
+                    success = await self._goto_with_retry(page, target_url)
+                    if success:
+                        return {"success": True, "action_taken": "click_link"}
                     else:
-                        result_links = await page.locator('a').all()
+                        return {"success": False, "error": "页面导航失败"}
+                else:
+                    return {"success": False, "error": f"无效的链接索引: {link_index + 1}"}
 
-                    # 尝试访问前3个搜索结果
-                    for link in result_links[:3]:
-                        try:
-                            href = await link.get_attribute('href')
-                            if href and href.startswith('http'):
-                                print(f"  -> 尝试访问: {href[:60]}...")
-                                await page.goto(href, timeout=10000, wait_until="domcontentloaded")
-                                await asyncio.sleep(1)
-                                page_text = await page.content()
-                                found_magnets = self.extract_magnet_links(page_text)
-                                if found_magnets:
-                                    magnets.extend(found_magnets)
-                                    print(f"  ✓ 在此页面找到 {len(found_magnets)} 个 magnet links")
-                                    break  # 找到后就不再访问其他链接
-                        except:
-                            continue
+            elif action_type == "search":
+                query = params.get("query", context.get("movie_name", ""))
+                engine_index = params.get("engine_index", 0)
 
-                    # 返回搜索结果页（如果需要继续搜索其他链接）
-                    if not magnets:
-                        await page.go_back()
-                        await asyncio.sleep(1)
+                if 0 <= engine_index < len(self.SEARCH_ENGINES):
+                    engine = self.SEARCH_ENGINES[engine_index]
+                    search_url = f"{engine['url']}{quote(query)}"
+                    print(f"🔍 在 {engine['name']} 搜索: {query}")
+                    success = await self._goto_with_retry(page, search_url, timeout=30000)
+                    if success:
+                        return {"success": True, "action_taken": "search"}
+                    else:
+                        return {"success": False, "error": "搜索页面加载失败"}
+                else:
+                    return {"success": False, "error": f"无效的搜索引擎索引: {engine_index}"}
 
-                except Exception as e:
-                    print(f"  ✗ 访问搜索结果失败: {str(e)}")
+            elif action_type == "scroll":
+                print("⬇️  向下滚动页面")
+                await page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+                await asyncio.sleep(1)
+                return {"success": True, "action_taken": "scroll"}
+
+            elif action_type == "back":
+                print("⬅️  返回上一页")
+                await page.go_back()
+                await asyncio.sleep(1)
+                return {"success": True, "action_taken": "back"}
+
+            elif action_type == "next_page":
+                print("➡️  尝试翻到下一页")
+                # 尝试常见的下一页链接
+                next_selectors = [
+                    'a:has-text("下一页")',
+                    'a:has-text("Next")',
+                    'a.nxt',
+                    'a.next',
+                    '#page a:last-child'
+                ]
+                for selector in next_selectors:
+                    try:
+                        next_btn = page.locator(selector).first
+                        if await next_btn.count() > 0:
+                            await next_btn.click()
+                            await asyncio.sleep(2)
+                            return {"success": True, "action_taken": "next_page"}
+                    except:
+                        continue
+                return {"success": False, "error": "未找到下一页按钮"}
+
+            elif action_type == "extract_magnets":
+                print("✅ 提取 magnet links 并完成搜索")
+                return {"success": True, "action_taken": "extract_magnets", "done": True}
+
+            elif action_type == "switch_engine":
+                engine_index = params.get("engine_index", 0)
+                if 0 <= engine_index < len(self.SEARCH_ENGINES):
+                    if engine_index == self.current_engine_index:
+                        return {"success": False, "error": "已经在使用该搜索引擎"}
+                    
+                    self.current_engine_index = engine_index
+                    engine = self.SEARCH_ENGINES[engine_index]
+                    # 使用当前搜索词在新引擎搜索
+                    search_query = f"{self.movie_name} magnet 下载"
+                    search_url = f"{engine['url']}{quote(search_query)}"
+                    print(f"🔄 切换到 {engine['name']} 搜索: {search_query}")
+                    success = await self._goto_with_retry(page, search_url, timeout=30000)
+                    if success:
+                        return {"success": True, "action_taken": "switch_engine"}
+                    else:
+                        return {"success": False, "error": "切换搜索引擎后页面加载失败"}
+                else:
+                    return {"success": False, "error": f"无效的搜索引擎索引: {engine_index}"}
+
+            elif action_type == "change_query":
+                new_query = params.get("query", "")
+                if new_query:
+                    print(f"🔄 更改搜索词: {new_query}")
+                    self.movie_name = new_query  # 更新类变量，确保后续迭代使用新搜索词
+                    # 在当前搜索引擎搜索
+                    engine = self.SEARCH_ENGINES[self.current_engine_index]
+                    search_url = f"{engine['url']}{quote(new_query)}"
+                    success = await self._goto_with_retry(page, search_url, timeout=30000)
+                    if success:
+                        return {"success": True, "action_taken": "change_query"}
+                    else:
+                        return {"success": False, "error": "更改搜索词后页面加载失败"}
+                else:
+                    return {"success": False, "error": "未提供新搜索词"}
+
+            elif action_type == "stop":
+                print("⏹️  LLM 决定停止搜索")
+                return {"success": True, "action_taken": "stop", "done": True}
+
+            else:
+                return {"success": False, "error": f"未知操作类型: {action_type}"}
 
         except Exception as e:
-            print(f"✗ 搜索 {engine} 失败: {str(e)}")
-
-        return magnets
+            return {"success": False, "error": str(e)}
 
     async def search_movie(self, movie_name: str) -> dict:
-        """搜索电影 magnet links"""
-        all_magnets = []
-        visited_engines = []
+        """使用 LLM 智能导航搜索电影 magnet links"""
+        
+        # 初始化类变量
+        self.movie_name = movie_name
 
-        print(f"\n{'='*60}")
-        print(f"开始搜索电影: {movie_name}")
-        print(f"{'='*60}\n")
+        print(f"\n{'='*70}")
+        print(f"🎬 开始智能搜索电影: {movie_name}")
+        print(f"{'='*70}\n")
+
+        if not DASHSCOPE_API_KEY:
+            print("❌ 错误: 未设置 DASHSCOPE_API_KEY 环境变量")
+            print("LLM 智能导航功能需要 API Key 才能运行")
+            print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+            return {
+                "movie_name": movie_name,
+                "total_found": 0,
+                "magnet_links": [],
+                "error": "未设置 DASHSCOPE_API_KEY"
+            }
 
         async with async_playwright() as p:
-            # 使用 Chromium 无头模式
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
+            browser_context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             )
-            page = await context.new_page()
+            page = await browser_context.new_page()
+            
+            iteration = 0  # 在 try 外部定义，确保 finally 中可访问
+            
+            try:
+                # 初始搜索
+                initial_query = f"{self.movie_name} magnet 下载"
+                engine = self.SEARCH_ENGINES[0]
+                search_url = f"{engine['url']}{quote(initial_query)}"
 
-            # 在多个搜索引擎搜索
-            for engine in self.SEARCH_ENGINES:
-                magnets = await self.search_site(page, engine, movie_name)
-                if magnets:
-                    all_magnets.extend(magnets)
-                    visited_engines.append(engine)
+                print(f"🔍 初始搜索: {initial_query}")
+                success = await self._goto_with_retry(page, search_url, timeout=30000)
+                if not success:
+                    print("❌ 初始搜索页面加载失败")
+                    return {
+                        "movie_name": self.movie_name,
+                        "total_found": 0,
+                        "magnet_links": [],
+                        "error": "初始搜索失败"
+                    }
 
-            await browser.close()
+                # 智能导航循环
+                for iteration in range(1, self.max_iterations + 1):
+                    print(f"\n{'─'*70}")
+                    print(f"📍 迭代 {iteration}/{self.max_iterations}")
+                    print(f"{'─'*70}")
 
-        # 去重
-        all_magnets = list(set(all_magnets))
+                    # 获取当前页面信息
+                    current_url = page.url
+                    html = await page.content()
 
-        result = {
-            "movie_name": movie_name,
-            "total_found": len(all_magnets),
-            "magnet_links": all_magnets,
-            "searched_engines": visited_engines,
+                    # 提取 magnet links
+                    magnets = self.extract_magnet_links(html)
+                    print(f"🧲 当前页面 magnet links: {len(magnets)} (累计: {len(self.found_magnets)})")
+
+                    # 如果已找到足够的 magnet links，可以提前结束
+                    if len(self.found_magnets) >= self.min_magnets:
+                        print(f"\n✅ 已找到 {len(self.found_magnets)} 个 magnet links，完成搜索")
+                        break
+
+                    # 提取页面内容
+                    page_content = self.extract_page_content(html)
+
+                    # 提取链接
+                    links = self.extract_links(html, current_url)
+
+                    # 构建 LLM 决策上下文（使用类变量 self.movie_name）
+                    llm_context = {
+                        "current_url": current_url,
+                        "page_content": page_content,
+                        "links": links,
+                        "magnet_count": len(magnets),
+                        "iteration": iteration,
+                        "movie_name": self.movie_name  # 使用类变量，支持动态更新
+                    }
+
+                    # 调用 LLM 规划下一步
+                    print("\n🤖 正在咨询 LLM 规划下一步操作...")
+                    plan_result = await self.plan_next_action(llm_context)
+
+                    if not plan_result["success"]:
+                        print(f"❌ LLM 规划失败: {plan_result.get('error')}")
+                        print("尝试默认策略：点击第一个链接")
+                        if links:
+                            # 尝试点击第一个相关链接
+                            action = {"action": "click_link", "params": {"link_index": 1}}
+                            await self.execute_action(page, action, llm_context)
+                        continue
+
+                    # 执行 LLM 规划的操作
+                    decision = plan_result["decision"]
+                    exec_result = await self.execute_action(page, decision, llm_context)
+
+                    if not exec_result["success"]:
+                        print(f"❌ 操作执行失败: {exec_result.get('error')}")
+                        # 尝试恢复：返回上一页或重新搜索
+                        if iteration < self.max_iterations:
+                            print("尝试继续...")
+                            continue
+
+                    # 检查是否应该停止
+                    if exec_result.get("done"):
+                        break
+
+                    # 避免过快操作
+                    await asyncio.sleep(1)
+                    
+            finally:
+                # 确保浏览器资源被正确释放
+                await browser.close()
+
+        print(f"\n{'='*70}")
+        print(f"🎉 搜索完成! 共找到 {len(self.found_magnets)} 个 magnet links")
+        print(f"{'='*70}\n")
+
+        return {
+            "movie_name": self.movie_name,  # 返回可能更新后的电影名
+            "total_found": len(self.found_magnets),
+            "magnet_links": self.found_magnets,
+            "iterations": iteration,
+            "search_history": self.search_history[-10:]  # 保留最近10条历史
         }
 
-        # 如果找到 magnet links，使用 LLM 分析
-        if all_magnets and DASHSCOPE_API_KEY:
-            print(f"\n使用 LLM 分析 {len(all_magnets)} 个 magnet links...")
-            llm_result = await self.search_with_llm(movie_name, all_magnets)
-            result["analysis"] = llm_result
+    async def analyze_with_llm(self, movie_name: str, magnet_links: List[str]) -> dict:
+        """使用 LLM 分析并选择最佳 magnet link"""
+        if not magnet_links:
+            return {"best_match": None, "reason": "未找到任何 magnet links"}
 
-        return result
+        # 从配置文件获取分析提示
+        prompt = get_analysis_prompt(movie_name, magnet_links)
+
+        messages = [{"role": "user", "content": prompt}]
+        result = await self.call_qwen_api(messages, temperature=0.3)
+
+        if result["success"]:
+            content = result["content"]
+            try:
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return {"best_match": magnet_links[0], "reason": "JSON 解析失败，返回第一个", "raw": content}
+        else:
+            return {"best_match": magnet_links[0], "reason": "API 调用失败，返回第一个"}
 
     def format_result(self, result: dict) -> str:
         """格式化搜索结果"""
         output = [
-            f"\n{'='*60}",
-            f"搜索结果: {result['movie_name']}",
-            f"{'='*60}",
-            f"搜索引擎: {', '.join(result.get('searched_engines', []))}",
-            f"找到数量: {result['total_found']}",
+            f"\n{'='*70}",
+            f"🎬 搜索结果: {result['movie_name']}",
+            f"{'='*70}",
+            f"📊 找到数量: {result['total_found']}",
+            f"🔄 迭代次数: {result.get('iterations', 'N/A')}",
             f"",
         ]
 
         if result['magnet_links']:
-            output.append("Magnet Links:")
+            output.append("🧲 Magnet Links:")
             for i, magnet in enumerate(result['magnet_links'], 1):
                 output.append(f"  {i}. {magnet}")
         else:
-            output.append("未找到任何 magnet links")
+            output.append("❌ 未找到任何 magnet links")
 
-        if 'analysis' in result:
-            analysis = result['analysis']
-            if 'llm_analysis' in analysis:
-                llm_result = analysis['llm_analysis']
-                output.append(f"\nLLM 分析结果:")
-                if 'best_match' in llm_result:
-                    if llm_result['best_match']:
-                        output.append(f"  最佳匹配: {llm_result['best_match']}")
-                    if 'reason' in llm_result:
-                        output.append(f"  理由: {llm_result['reason']}")
-                    if 'quality' in llm_result:
-                        output.append(f"  质量: {llm_result['quality']}")
-                    if 'size' in llm_result:
-                        output.append(f"  大小: {llm_result['size']}")
-                elif 'raw_response' in llm_result:
-                    output.append(f"  原始响应: {llm_result['raw_response']}")
-            elif 'error' in analysis:
-                output.append(f"\nLLM 分析失败: {analysis['error']}")
-
-        output.append(f"{'='*60}\n")
+        output.append(f"{'='*70}\n")
         return "\n".join(output)
 
 
 async def main():
     """主函数"""
-    # 检查环境变量（可选，不设置也能进行基础搜索）
+    # 检查环境变量
     if not DASHSCOPE_API_KEY or DASHSCOPE_API_KEY == "your_api_key_here":
-        print("警告: 未设置 DASHSCOPE_API_KEY 环境变量")
-        print("LLM 分析功能将被禁用，仅进行基础搜索")
-        print("提示: 复制 .env.example 为 .env 并填入真实的 API Key 以启用 LLM 分析\n")
+        print("⚠️  警告: 未设置 DASHSCOPE_API_KEY 环境变量")
+        print("LLM 智能导航功能需要 API Key 才能运行")
+        print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+        return
 
     # 获取用户输入
     movie_name = input("请输入要搜索的电影名称: ").strip()
     if not movie_name:
-        print("错误: 电影名称不能为空")
+        print("❌ 错误: 电影名称不能为空")
         return
 
     # 执行搜索
-    searcher = MovieSearcher()
+    searcher = MovieSearcher(max_iterations=15, min_magnets=5, max_retries=3)
     try:
         result = await searcher.search_movie(movie_name)
         # 输出结果
         print(searcher.format_result(result))
+
+        # 如果找到结果，自动使用 LLM 推荐最佳下载源
+        if result['magnet_links']:
+            print("\n🤖 正在分析并推荐最佳 magnet link...")
+            analysis = await searcher.analyze_with_llm(movie_name, result['magnet_links'])
+            print(f"\n💡 LLM 推荐:")
+            print(f"  最佳匹配: {analysis.get('best_match', 'N/A')}")
+            print(f"  理由: {analysis.get('reason', 'N/A')}")
+            print(f"  质量: {analysis.get('quality', 'N/A')}")
+            print(f"  置信度: {analysis.get('confidence', 'N/A')}")
+
     finally:
         await searcher.close()
 
