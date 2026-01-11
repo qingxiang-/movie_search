@@ -13,6 +13,10 @@ from urllib.parse import quote
 
 from playwright.async_api import async_playwright, Page
 import httpx
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 # 从环境变量加载配置
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
