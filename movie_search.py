@@ -27,11 +27,10 @@ DASHSCOPE_MODEL = os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
 class MovieSearcher:
     """电影 magnet link 搜索器"""
 
-    # 常用 BT 搜索站点
-    SEARCH_SITES = [
-        "https://www.btdigs.com/",
-        "https://btso.xyz/",
-        "https://www.magnetdl.com/",
+    # 通用搜索引擎（用于搜索 magnet links）
+    SEARCH_ENGINES = [
+        "https://www.baidu.com/s?wd=",
+        "https://www.bing.com/search?q=",
     ]
 
     def __init__(self):
@@ -117,23 +116,17 @@ class MovieSearcher:
         magnet_pattern = r'magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^<>\s]*'
         return list(set(re.findall(magnet_pattern, page_text)))
 
-    async def search_site(self, page: Page, site: str, movie_name: str) -> List[str]:
-        """在单个站点搜索"""
+    async def search_site(self, page: Page, engine: str, movie_name: str) -> List[str]:
+        """在单个搜索引擎搜索"""
         magnets = []
 
         try:
-            # 构造搜索 URL（根据不同站点调整）
-            if "btdigs" in site:
-                search_url = f"{site}search?q={quote(movie_name)}"
-            elif "btso" in site:
-                search_url = f"{site}search/{quote(movie_name)}"
-            elif "magnetdl" in site:
-                search_url = f"{site}{movie_name[0].lower()}/{quote(movie_name)}/"
-            else:
-                search_url = f"{site}search?q={quote(movie_name)}"
+            # 构造搜索 URL（搜索 movie name + magnet）
+            search_query = f"{quote(movie_name)} magnet"
+            search_url = f"{engine}{search_query}"
 
             print(f"正在访问: {search_url}")
-            await page.goto(search_url, timeout=15000, wait_until="domcontentloaded")
+            await page.goto(search_url, timeout=30000, wait_until="domcontentloaded")
 
             # 等待页面加载
             await asyncio.sleep(2)
@@ -143,30 +136,53 @@ class MovieSearcher:
             magnets = self.extract_magnet_links(page_text)
 
             if magnets:
-                print(f"✓ 在 {site} 找到 {len(magnets)} 个 magnet links")
+                print(f"✓ 在 {engine} 找到 {len(magnets)} 个 magnet links")
             else:
-                # 尝试点击第一个结果链接
+                # 尝试点击搜索结果中的链接来获取 magnet
                 try:
-                    links = await page.locator('a[href*="/detail/"], a[href*="/torrent/"], a.torrent-link').all()
-                    if links:
-                        await links[0].click()
-                        await asyncio.sleep(2)
-                        page_text = await page.content()
-                        magnets = self.extract_magnet_links(page_text)
-                        if magnets:
-                            print(f"✓ 在 {site} 的详情页找到 {len(magnets)} 个 magnet links")
-                except:
-                    pass
+                    if "baidu.com" in engine:
+                        # 百度搜索结果选择器
+                        result_links = await page.locator('div.result a').all()
+                    elif "bing.com" in engine:
+                        # Bing 搜索结果选择器
+                        result_links = await page.locator('li.b_algo a').all()
+                    else:
+                        result_links = await page.locator('a').all()
+
+                    # 尝试访问前3个搜索结果
+                    for link in result_links[:3]:
+                        try:
+                            href = await link.get_attribute('href')
+                            if href and href.startswith('http'):
+                                print(f"  -> 尝试访问: {href[:60]}...")
+                                await page.goto(href, timeout=10000, wait_until="domcontentloaded")
+                                await asyncio.sleep(1)
+                                page_text = await page.content()
+                                found_magnets = self.extract_magnet_links(page_text)
+                                if found_magnets:
+                                    magnets.extend(found_magnets)
+                                    print(f"  ✓ 在此页面找到 {len(found_magnets)} 个 magnet links")
+                                    break  # 找到后就不再访问其他链接
+                        except:
+                            continue
+
+                    # 返回搜索结果页（如果需要继续搜索其他链接）
+                    if not magnets:
+                        await page.go_back()
+                        await asyncio.sleep(1)
+
+                except Exception as e:
+                    print(f"  ✗ 访问搜索结果失败: {str(e)}")
 
         except Exception as e:
-            print(f"✗ 搜索 {site} 失败: {str(e)}")
+            print(f"✗ 搜索 {engine} 失败: {str(e)}")
 
         return magnets
 
     async def search_movie(self, movie_name: str) -> dict:
         """搜索电影 magnet links"""
         all_magnets = []
-        visited_sites = []
+        visited_engines = []
 
         print(f"\n{'='*60}")
         print(f"开始搜索电影: {movie_name}")
@@ -180,12 +196,12 @@ class MovieSearcher:
             )
             page = await context.new_page()
 
-            # 在多个站点搜索
-            for site in self.SEARCH_SITES:
-                magnets = await self.search_site(page, site, movie_name)
+            # 在多个搜索引擎搜索
+            for engine in self.SEARCH_ENGINES:
+                magnets = await self.search_site(page, engine, movie_name)
                 if magnets:
                     all_magnets.extend(magnets)
-                    visited_sites.append(site)
+                    visited_engines.append(engine)
 
             await browser.close()
 
@@ -196,7 +212,7 @@ class MovieSearcher:
             "movie_name": movie_name,
             "total_found": len(all_magnets),
             "magnet_links": all_magnets,
-            "searched_sites": visited_sites,
+            "searched_engines": visited_engines,
         }
 
         # 如果找到 magnet links，使用 LLM 分析
@@ -213,7 +229,7 @@ class MovieSearcher:
             f"\n{'='*60}",
             f"搜索结果: {result['movie_name']}",
             f"{'='*60}",
-            f"搜索站点: {', '.join(result['searched_sites'])}",
+            f"搜索引擎: {', '.join(result.get('searched_engines', []))}",
             f"找到数量: {result['total_found']}",
             f"",
         ]
