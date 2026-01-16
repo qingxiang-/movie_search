@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page
 import httpx
 from dotenv import load_dotenv
+import openai
 
 from prompts import get_planning_prompt, get_analysis_prompt
 
@@ -22,9 +23,18 @@ from prompts import get_planning_prompt, get_analysis_prompt
 load_dotenv()
 
 # 从环境变量加载配置
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "qwen").lower()
+
+# Qwen API 配置
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 DASHSCOPE_MODEL = os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
+
+# Azure OpenAI 配置
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
 
 
 class MovieSearcher:
@@ -46,29 +56,52 @@ class MovieSearcher:
         self.found_magnets = []
         self.movie_name = ""  # 作为类变量，支持动态更新
         self.current_engine_index = 0  # 当前使用的搜索引擎索引
+        self.llm_provider = LLM_PROVIDER
+        
+        # 配置 Azure OpenAI
+        if self.llm_provider == "azure" and AZURE_OPENAI_API_KEY:
+            openai.api_type = "azure"
+            openai.api_key = AZURE_OPENAI_API_KEY
+            openai.api_base = AZURE_OPENAI_ENDPOINT
+            openai.api_version = AZURE_OPENAI_API_VERSION
 
     async def close(self):
         """关闭 HTTP 客户端"""
         await self.http_client.aclose()
 
-    async def call_qwen_api(self, messages: list, temperature: float = 0.7) -> dict:
-        """调用 Qwen API"""
-        url = f"{DASHSCOPE_BASE_URL}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        data = {
-            "model": DASHSCOPE_MODEL,
-            "messages": messages,
-            "temperature": temperature,
-        }
-
+    async def call_llm_api(self, messages: list, temperature: float = 0.7, max_tokens: int = 2000) -> dict:
+        """调用 LLM API (支持 Qwen 和 Azure OpenAI)"""
         try:
-            response = await self.http_client.post(url, json=data, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            return {"success": True, "content": result["choices"][0]["message"]["content"]}
+            if self.llm_provider == "azure":
+                # 调用 Azure OpenAI (使用 openai v0.28.1 API)
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: openai.ChatCompletion.create(
+                        engine=AZURE_OPENAI_DEPLOYMENT,
+                        messages=messages,
+                        temperature=temperature,
+                        max_completion_tokens=max_tokens
+                    )
+                )
+                content = response.choices[0].message["content"]
+                return {"success": True, "content": content}
+            else:
+                # 调用 Qwen API
+                url = f"{DASHSCOPE_BASE_URL}/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
+                    "Content-Type": "application/json",
+                }
+                data = {
+                    "model": DASHSCOPE_MODEL,
+                    "messages": messages,
+                    "temperature": temperature,
+                }
+
+                response = await self.http_client.post(url, json=data, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                return {"success": True, "content": result["choices"][0]["message"]["content"]}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -168,7 +201,7 @@ class MovieSearcher:
             {"role": "user", "content": "请规划下一步操作"}
         ]
 
-        result = await self.call_qwen_api(messages, temperature=0.7)
+        result = await self.call_llm_api(messages, temperature=0.7)
 
         if result["success"]:
             content = result["content"]
@@ -339,18 +372,32 @@ class MovieSearcher:
 
         print(f"\n{'='*70}")
         print(f"🎬 开始智能搜索电影: {movie_name}")
+        print(f"🤖 使用 LLM 提供商: {self.llm_provider.upper()}")
         print(f"{'='*70}\n")
 
-        if not DASHSCOPE_API_KEY:
-            print("❌ 错误: 未设置 DASHSCOPE_API_KEY 环境变量")
-            print("LLM 智能导航功能需要 API Key 才能运行")
-            print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
-            return {
-                "movie_name": movie_name,
-                "total_found": 0,
-                "magnet_links": [],
-                "error": "未设置 DASHSCOPE_API_KEY"
-            }
+        # 检查 API Key
+        if self.llm_provider == "azure":
+            if not AZURE_OPENAI_API_KEY:
+                print("❌ 错误: 未设置 AZURE_OPENAI_API_KEY 环境变量")
+                print("Azure OpenAI 功能需要 API Key 才能运行")
+                print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+                return {
+                    "movie_name": movie_name,
+                    "total_found": 0,
+                    "magnet_links": [],
+                    "error": "未设置 AZURE_OPENAI_API_KEY"
+                }
+        else:
+            if not DASHSCOPE_API_KEY:
+                print("❌ 错误: 未设置 DASHSCOPE_API_KEY 环境变量")
+                print("LLM 智能导航功能需要 API Key 才能运行")
+                print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+                return {
+                    "movie_name": movie_name,
+                    "total_found": 0,
+                    "magnet_links": [],
+                    "error": "未设置 DASHSCOPE_API_KEY"
+                }
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -509,11 +556,18 @@ class MovieSearcher:
 async def main():
     """主函数"""
     # 检查环境变量
-    if not DASHSCOPE_API_KEY or DASHSCOPE_API_KEY == "your_api_key_here":
-        print("⚠️  警告: 未设置 DASHSCOPE_API_KEY 环境变量")
-        print("LLM 智能导航功能需要 API Key 才能运行")
-        print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
-        return
+    if LLM_PROVIDER == "azure":
+        if not AZURE_OPENAI_API_KEY or AZURE_OPENAI_API_KEY == "your_azure_api_key_here":
+            print("⚠️  警告: 未设置 AZURE_OPENAI_API_KEY 环境变量")
+            print("Azure OpenAI 功能需要 API Key 才能运行")
+            print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+            return
+    else:
+        if not DASHSCOPE_API_KEY or DASHSCOPE_API_KEY == "your_api_key_here":
+            print("⚠️  警告: 未设置 DASHSCOPE_API_KEY 环境变量")
+            print("LLM 智能导航功能需要 API Key 才能运行")
+            print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+            return
 
     # 获取用户输入
     movie_name = input("请输入要搜索的电影名称: ").strip()

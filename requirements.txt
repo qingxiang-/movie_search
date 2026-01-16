@@ -4,6 +4,9 @@ playwright==1.35.0
 # HTTP 客户端 - 用于直接调用 Qwen API
 httpx>=0.24.0
 
+# OpenAI SDK - 用于 Azure OpenAI (v0.28.1 for Python 3.6 compatibility)
+openai<1.0.0
+
 # 环境变量管理
 python-dotenv>=0.19.0
 
@@ -13,3 +16,12 @@ beautifulsoup4>=4.12.0
 # 测试框架
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+
+# YAML 配置文件解析
+pyyaml>=6.0
+
+# 阿里云 DirectMail SDK
+alibabacloud-dm20151123==1.8.1
+alibabacloud-credentials>=0.3.0
+alibabacloud-tea-openapi>=0.3.0
+alibabacloud-tea-util>=0.3.0

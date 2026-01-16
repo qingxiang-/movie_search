@@ -1,0 +1,12 @@
+# 邮件配置文件
+recipients:
+  - 42213885@qq.com
+
+# 发件人配置
+sender: no_reply@extmail.codebu.top
+
+# 邮件设置
+settings:
+  region: cn-hangzhou
+  address_type: 1  # 1 表示互联网邮箱
+  reply_to: true

@@ -45,3 +45,8 @@ test-results/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated data files
+data/
+*.json
+*.html
