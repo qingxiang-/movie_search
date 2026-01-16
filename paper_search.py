@@ -17,12 +17,22 @@ load_dotenv()
 async def main():
     """主函数 - 使用8组预定义关键词搜索"""
     # 检查环境变量
-    api_key = os.getenv("DASHSCOPE_API_KEY", "")
-    if not api_key or api_key == "your_api_key_here":
-        print("⚠️  警告: 未设置 DASHSCOPE_API_KEY 环境变量")
-        print("LLM 智能导航功能需要 API Key 才能运行")
-        print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
-        return
+    llm_provider = os.getenv("LLM_PROVIDER", "qwen").lower()
+    
+    if llm_provider == "azure":
+        api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
+        if not api_key or api_key == "your_azure_api_key_here":
+            print("⚠️  警告: 未设置 AZURE_OPENAI_API_KEY 环境变量")
+            print("Azure OpenAI 功能需要 API Key 才能运行")
+            print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+            return
+    else:
+        api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if not api_key or api_key == "your_api_key_here":
+            print("⚠️  警告: 未设置 DASHSCOPE_API_KEY 环境变量")
+            print("LLM 智能导航功能需要 API Key 才能运行")
+            print("提示: 复制 .env.example 为 .env 并填入真实的 API Key\n")
+            return
     
     print("="*70)
     print("📚 学术论文搜索系统 - 8组关键词模式")
