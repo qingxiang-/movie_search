@@ -71,17 +71,35 @@ class LLMClient:
         try:
             if self.provider == "azure":
                 # 调用 Azure OpenAI (使用 openai v0.28.1 API)
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: openai.ChatCompletion.create(
-                        engine=self.azure_deployment,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
+                # 注意：某些 Azure 模型可能不支持 max_tokens，改用 max_completion_tokens
+                try:
+                    response = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: openai.ChatCompletion.create(
+                            engine=self.azure_deployment,
+                            messages=messages,
+                            temperature=temperature,
+                            # 不传 max_tokens，让模型自动决定
+                        )
                     )
-                )
-                content = response.choices[0].message["content"]
-                return {"success": True, "content": content}
+                    content = response.choices[0].message["content"]
+                    return {"success": True, "content": content}
+                except Exception as e:
+                    error_msg = str(e)
+                    if "max_tokens" in error_msg or "max_completion_tokens" in error_msg:
+                        # 如果是参数问题，重试不带 max_tokens
+                        response = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: openai.ChatCompletion.create(
+                                engine=self.azure_deployment,
+                                messages=messages,
+                                temperature=temperature
+                            )
+                        )
+                        content = response.choices[0].message["content"]
+                        return {"success": True, "content": content}
+                    else:
+                        raise
             else:
                 # 调用 Qwen API
                 url = f"{self.base_url}/chat/completions"
