@@ -295,7 +295,7 @@ class EmailSender:
     <p style="color: #666;">
         <strong>主题:</strong> {topic}<br>
         <strong>时间:</strong> {date_range}<br>
-        <strong>推荐:</strong> {len(stocks)} 只最有价值的股票
+        <strong>报告:</strong> 已分析 {len(stocks)} 只关注列表股票
     </p>
     
     <div style="background: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin: 20px 0;">
@@ -321,8 +321,12 @@ class EmailSender:
             html += f"""
     <div style="margin: 30px 0; padding: 20px; border: 2px solid #e0e0e0; border-radius: 8px; background: #fafafa;">
         <h3 style="color: #2c3e50; margin-top: 0;">
-            🥇 Top {rank}: {symbol} - {company}
+            No.{rank}: {symbol} - {company}
         </h3>
+        
+        <p style="color: #666; font-size: 14px; margin: 10px 0;">
+            <strong>现价:</strong> {stock.get('current_price', 'N/A')} | <strong>目标价:</strong> {target_price}
+        </p>
         
         <div style="display: flex; gap: 15px; margin: 10px 0;">
             <span style="background: {rec_color}; color: white; padding: 5px 12px; border-radius: 4px; font-size: 13px; font-weight: bold;">
@@ -337,7 +341,6 @@ class EmailSender:
         </div>
         
         <p style="color: #666; font-size: 13px; margin: 10px 0;">
-            <strong>目标价:</strong> {target_price}
         </p>
 """
             
@@ -501,7 +504,7 @@ class EmailSender:
                 print(f"❌ 发送到 {recipient} 失败: {e}")
         
         if success_count > 0:
-            print(f"✅ 邮件发送成功！发送到 {success_count}/{len(self.recipients)} 个收件人，共 {len(stocks)} 只股票")
+            print(f"✅ 邮件发送成功！发送到 {success_count}/{len(self.recipients)} 个收件人，共分析 {len(stocks)} 只股票")
             return True
         else:
             print(f"❌ 所有邮件发送失败")

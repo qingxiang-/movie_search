@@ -104,22 +104,31 @@ class PaperSearchAgent(BaseBrowserAgent):
         Returns:
             完整的搜索 URL
         """
-        current_year = datetime.now().year
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=self.date_range_days)
+        current_year = end_date.year
+
         engine = next((e for e in self.SEARCH_ENGINES if e['name'] == engine_name), self.SEARCH_ENGINES[0])
         base_url = engine['url']
         
         if engine_name == "Google Scholar":
             # Google Scholar 日期参数: as_ylo (year low) 和 as_yhi (year high)
-            # 只搜索最近2年的论文
-            url = f"{base_url}{quote(query)}&as_ylo={current_year - 1}&as_yhi={current_year}"
+            # For simplicity, we filter by the current year.
+            url = f"{base_url}{quote(query)}&as_ylo={current_year}&as_yhi={current_year}"
         
         elif engine_name == "arXiv":
-            # arXiv 搜索参数 - 按日期排序，只看最新2页（20篇）
-            url = f"{base_url}{quote(query)}&searchtype=all&abstracts=show&order=-announced_date_first&size=20"
+            # arXiv 搜索参数 - 按日期排序，并限制在日期范围内
+            start_date_str = start_date.strftime('%Y%m%d%H%M%S')
+            end_date_str = end_date.strftime('%Y%m%d%H%M%S')
+            date_query = f"submittedDate:[{start_date_str} TO {end_date_str}]"
+            
+            # 将日期范围查询与用户查询结合
+            full_query = f"({query}) AND {date_query}"
+            url = f"{base_url}{quote(full_query)}&searchtype=all&abstracts=show&order=-announced_date_first&size=50"
         
         elif engine_name == "Semantic Scholar":
             # Semantic Scholar 支持年份过滤
-            url = f"{base_url}{quote(query)}&year%5B0%5D={current_year - 1}&year%5B1%5D={current_year}"
+            url = f"{base_url}{quote(query)}&year%5B0%5D={current_year}"
         
         else:
             # Google 或其他搜索引擎，使用基本 URL

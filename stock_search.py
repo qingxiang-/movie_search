@@ -39,13 +39,10 @@ async def main():
     print("="*70)
     print()
     
-    print("🎯 目标: 找出今晚最有投资价值的 5 只美股")
+    print("🎯 目标: 分析用户关注列表中的股票")
     print("📊 分析维度: 市场趋势、技术面、基本面、催化剂、风险")
     print()
-    print("🌐 数据来源策略:")
-    print("   ✅ 直接访问专业财经网站（Yahoo Finance, Finviz 等）")
-    print("   ✅ 实时热门股票榜单")
-    print("   ✅ 今日涨幅榜和成交量排行")
+    print("🌐 策略: 固定关注列表深度调研")
     print()
     print("🚀 开始分析...")
     print()
@@ -53,20 +50,26 @@ async def main():
     # 获取代理配置
     proxy = os.getenv("HTTP_PROXY", "http://127.0.0.1:7890")
     
+    # 用户的关注列表
+    watchlist = [
+        "GOOGL", "TSLA", "MSFT", "AAPL", "NVDA", "NFLX", "BABA", 
+        "TCEHY", "LKNCY", "ASML", "PLTR", "XPEV", "LI", "NIO", "BYDDY", 
+        "CVNA", "HTHT", "JD", "BILI", "PDD"
+    ]
+    
     # 创建股票分析 Agent
     agent = StockAnalysisAgent(
         max_iterations=20,
         min_stocks=3,
-        max_stocks=5,
+        max_stocks=len(watchlist), # 调整最大股票数为关注列表长度
         max_retries=3,
         proxy=proxy
     )
     
     try:
-        # 执行搜索和分析（使用直接访问财经网站策略）
+        # 执行搜索和分析（使用固定关注列表）
         result = await agent.search_stocks(
-            use_direct_sites=True,      # 直接访问专业财经网站
-            use_search_engines=False    # 不使用搜索引擎
+            fixed_symbols=watchlist
         )
         
         all_stocks = result.get('all_stocks', [])
@@ -90,7 +93,7 @@ async def main():
         
         # 显示推荐股票
         top_stocks = analysis.get('top_stocks', [])
-        print(f"\n🏆 今晚最值得关注的 {len(top_stocks)} 只股票:\n")
+        print(f"\n🏆 分析完成，共 {len(top_stocks)} 只股票 (按评分排序):\n")
         
         for stock in top_stocks:
             rank = stock.get('rank', 0)
@@ -105,9 +108,12 @@ async def main():
             recommendation = summary.get('recommendation', 'N/A')
             score = summary.get('overall_score', 0)
             time_horizon = summary.get('time_horizon', 'N/A')
+            current_price = stock.get('current_price', 'N/A')
+            target_price = stock.get('target_price', 'N/A')
 
             print(f"{'─'*70}")
-            print(f"🥇 Top {rank}: {symbol} - {company}")
+            print(f"🥇 No.{rank}: {symbol} - {company}")
+            print(f"   现价: {current_price} | 目标价: {target_price}")
             print(f"   推荐: {recommendation} | 评分: {score}/10 | 周期: {time_horizon}")
             
             # 选股理由
@@ -186,6 +192,8 @@ async def main():
                 'rank': stock.get('rank', 0),
                 'symbol': stock.get('symbol', 'N/A'),
                 'company_name': stock.get('company_name', 'N/A'),
+                'current_price': stock.get('current_price', 'N/A'),
+                'target_price': stock.get('target_price', 'N/A'),
                 'recommendation': summary.get('recommendation', 'N/A'),
                 'investment_score': summary.get('overall_score', 0),
                 'background': fundamental.get('background', ''),
@@ -193,8 +201,7 @@ async def main():
                 'risks': fundamental.get('risks', []),
                 'selection_reason': stock.get('selection_reason', ''),
                 'detailed_analysis': summary.get('conclusion', ''),
-                'time_horizon': summary.get('time_horizon', 'N/A'),
-                'target_price': 'N/A' # 新结构中无此字段
+                'time_horizon': summary.get('time_horizon', 'N/A')
             }
             email_stocks.append(email_stock)
         
