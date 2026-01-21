@@ -303,6 +303,7 @@ class StockAnalysisAgent(BaseBrowserAgent):
             "news": [],
             "price_info": {},
             "company_info": "",
+            "key_statistics": {},
             "analyst_rating": ""
         }
         
@@ -310,62 +311,112 @@ class StockAnalysisAgent(BaseBrowserAgent):
         yahoo_url = f"https://finance.yahoo.com/quote/{symbol}"
         print(f"   访问: {yahoo_url}")
         
-        success = await self._goto_with_retry(page, yahoo_url, timeout=45000)  # 增加超时
+        success = await self._goto_with_retry(page, yahoo_url, timeout=45000)
         if success:
             await asyncio.sleep(3)
             html = await page.content()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # 提取价格信息
-            text = soup.get_text()
-            
             # 提取公司信息
             company_section = soup.find('section', {'data-testid': 'quote-profile'})
             if company_section:
-                details['company_info'] = company_section.get_text(strip=True)[:500]
+                details['company_info'] = company_section.get_text(strip=True)[:800]
             
-            # 提取关键数据
-            details['page_content'] = text[:2000]
+            # 提取当前价格
+            # 优先使用 data-testid="qsp-price" (Yahoo Finance 新版)
+            price_element = soup.select_one('[data-testid="qsp-price"]')
+            if price_element:
+                details['current_price'] = price_element.get_text(strip=True)
+            else:
+                # 备选: fin-streamer (注意: 可能有多个，需要找对 context)
+                # 查找位于 quote-header 或 price section 内的 fin-streamer
+                price_element = soup.select_one('fin-streamer[data-field="regularMarketPrice"][data-symbol="{}"]'.format(symbol))
+                if not price_element:
+                     price_element = soup.select_one('fin-streamer[data-field="regularMarketPrice"]')
+                
+                if price_element:
+                    details['current_price'] = price_element.get_text(strip=True)
+
+            # 提取关键统计数据 (Key Statistics)
+            # Yahoo Finance 新版使用 ul/li 结构
+            # 查找包含特定 title 的 span，然后找其后的 value
+            
+            key_map = {
+                'Previous Close': 'previous_close',
+                'Open': 'open',
+                'Day\'s Range': 'day_range',
+                '52 Week Range': 'year_range',
+                'Volume': 'volume',
+                'Avg. Volume': 'avg_volume',
+                'Market Cap': 'market_cap',
+                'Beta (5Y Monthly)': 'beta',
+                'PE Ratio (TTM)': 'pe_ratio',
+                'EPS (TTM)': 'eps',
+                'Forward Dividend & Yield': 'dividend',
+                'Ex-Dividend Date': 'ex_dividend_date',
+                '1y Target Est': 'target_est'
+            }
+
+            # 查找所有的 li 元素，然后尝试从中提取标签和值
+            # 这种方法更通用，不依赖特定的 class
+            list_items = soup.find_all('li')
+            for li in list_items:
+                # 尝试找到 label 和 value
+                # 通常 label 在一个 span 或 div 中，value 在另一个
+                texts = list(li.stripped_strings)
+                if len(texts) >= 2:
+                    label_text = texts[0]
+                    value_text = texts[1]
+                    
+                    # 检查 label 是否是我们需要的
+                    for k, v in key_map.items():
+                        if k in label_text:
+                            # 有时候 value 会包含一些额外信息，只取第一个主要部分
+                            details['key_statistics'][v] = value_text.split(' ')[0] if ' ' in value_text and v != 'day_range' and v != 'year_range' else value_text
+                            break
+            
+            # 如果没找到 current_price，用 previous_close 兜底
+            if 'current_price' not in details and 'previous_close' in details['key_statistics']:
+                details['current_price'] = details['key_statistics']['previous_close']
+
+            # 备用方案：通过 title 属性查找 (针对新版 Yahoo)
+            if not details['key_statistics']:
+                 for k, v in key_map.items():
+                    element = soup.find(attrs={"title": k})
+                    if element:
+                        # 找到 title 对应的 label 元素后，尝试找它的父级 li，再找 value
+                        parent_li = element.find_parent('li')
+                        if parent_li:
+                            value_element = parent_li.find(class_="value")
+                            if value_element:
+                                details['key_statistics'][v] = value_element.get_text(strip=True)
+            
+            print(f"   📊 价格: {details.get('current_price', 'N/A')} | 目标价: {details['key_statistics'].get('target_est', 'N/A')}")
+            
+            # 提取页面文本作为补充
+            details['page_content'] = soup.get_text()[:3000]
         
-        # 2. 搜索最新新闻 - 使用搜索引擎而不是直接访问新闻页
+        # 2. 搜索最新新闻
         print(f"   搜索新闻: {symbol} stock news")
         
-        # 尝试从主页提取新闻
-        if success:
-            # 在主页上查找新闻链接
-            news_links = soup.find_all('a', href=True, limit=10)
-            for link in news_links:
-                href = link.get('href', '')
-                text = link.get_text(strip=True)
-                # 查找包含 news 或 story 的链接
-                if ('news' in href or 'story' in href) and len(text) > 20:
-                    if text not in details['news']:
-                        details['news'].append(text)
-                        if len(details['news']) >= 5:
-                            break
+        # 尝试访问专门的新闻页
+        news_url = f"https://finance.yahoo.com/quote/{symbol}/news"
+        print(f"   访问新闻页: {news_url}")
         
-        # 如果主页没有足够新闻，尝试访问新闻页
-        if len(details['news']) < 3:
-            news_url = f"https://finance.yahoo.com/quote/{symbol}/news"
-            print(f"   访问新闻页: {news_url}")
+        success = await self._goto_with_retry(page, news_url, timeout=45000, max_retries=2)
+        if success:
+            await asyncio.sleep(3)
+            html = await page.content()
+            soup = BeautifulSoup(html, 'html.parser')
             
-            success = await self._goto_with_retry(page, news_url, timeout=45000, max_retries=2)
-            if success:
-                await asyncio.sleep(3)
-                html = await page.content()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # 更精确的新闻提取 - 查找文章标题
-                # 方法1: 查找包含新闻的 div
-                news_items = soup.find_all(['h3', 'h2'], limit=20)
-                for item in news_items:
-                    title = item.get_text(strip=True)
-                    # 过滤掉导航栏和短标题
-                    if title and len(title) > 20 and title not in ['News', 'Life', 'Entertainment', 'Finance', 'Sports']:
-                        if title not in details['news']:
-                            details['news'].append(title)
-                            if len(details['news']) >= 5:
-                                break
+            news_items = soup.find_all(['h3', 'h2'], limit=30)
+            for item in news_items:
+                title = item.get_text(strip=True)
+                if title and len(title) > 20 and title not in ['News', 'Life', 'Entertainment', 'Finance', 'Sports', 'Videos']:
+                    if title not in details['news']:
+                        details['news'].append(title)
+                        if len(details['news']) >= 15: # 增加到 15 条
+                            break
         
         print(f"   ✅ 收集到 {len(details['news'])} 条新闻")
         
@@ -405,161 +456,214 @@ class StockAnalysisAgent(BaseBrowserAgent):
         print("⚠️  LLM粗筛选失败，将按涨跌幅选择前20只")
         return stocks[:20]
     
-    async def deep_analysis_with_llm(self, stock_details: Dict[str, Any]) -> Dict[str, Any]:
-        """使用 LLM 对单个股票进行深度分析"""
-        symbol = stock_details['symbol']
+    async def _analyze_fundamentals(self, symbol: str, stock_details: Dict[str, Any]) -> Dict[str, Any]:
+        """专门进行基本面分析"""
+        print(f"   📘 [{symbol}] 正在进行基本面分析...")
         
-        news_list = stock_details.get('news', [])[:5]
-        news_text = "".join([f"- {news}\n" for news in news_list])
-        page_content = stock_details.get('page_content', 'N/A')[:1500]
+        news_list = stock_details.get('news', [])
+        news_text = "\n".join([f"- {news}" for news in news_list])
         
-        prompt = f"""你是一位资深的美股分析师，请对以下股票进行深入、专业的分析，需要同时覆盖技术面和基本面。
+        stats = stock_details.get('key_statistics', {})
+        stats_text = "\n".join([f"- {k}: {v}" for k, v in stats.items()])
+        stats_text += f"\n- Current Price: {stock_details.get('current_price', 'N/A')}"
+        
+        company_info = stock_details.get('company_info', 'N/A')
+        
+        prompt = f"""你是一位顶级美股基本面分析师 (Fundamental Analyst)。请对 {symbol} 进行深入的基本面分析。
 
-**股票代码: {symbol}**
+**公司资料:**
+{company_info}
 
-**最新新闻:**
-{news_text if news_text else "无"}
+**关键财务指标:**
+{stats_text}
 
-**页面信息摘要:**
-{page_content}
+**近期新闻与舆情:**
+{news_text}
 
-**分析要求:**
+请分析以下维度:
+1.  **商业模式与护城河**: 公司的核心竞争力是什么？
+2.  **财务健康度**: 基于 PE, EPS, 市值等数据评估。
+3.  **增长驱动力**: 近期新闻中提到的新产品、新市场或战略合作。
+4.  **宏观与行业环境**: 当前环境对该公司的影响。
+5.  **风险因素**: 监管、竞争或执行风险。
 
-请基于以上信息，结合你对该公司的知识，提供以下两方面的分析：
-
-1.  **基本面分析 (Fundamental Analysis):**
-    *   **公司背景**: 核心业务、行业地位及护城河。
-    *   **财务状况**: 基于常识判断其营收、利润、现金流的健康状况。
-    *   **增长催化剂**: 未来可能驱动增长的关键因素。
-    *   **主要风险**: 公司面临的核心风险点。
-
-2.  **技术面分析 (Technical Analysis):**
-    *   **当前趋势**: 处于上升、下降还是盘整趋势？
-    *   **关键价位**: 分析关键的支撑位和阻力位。
-    *   **量价关系**: 成交量是否配合价格走势？
-    *   **技术指标**: （基于常识推断）RSI、MACD等指标可能处于什么状态？
-
-**输出结果:**
-
-请严格按照以下 JSON 格式返回，确保所有字段都存在：
+请返回 JSON 格式:
 {{
-    "symbol": "{symbol}",
-    "company_name": "公司名称",
-    "fundamental_analysis": {{
-        "background": "公司背景和核心业务分析 (100字内)",
-        "financial_health": "财务健康状况评估 (80字内)",
-        "catalysts": ["增长催化剂1", "增长催化剂2"],
-        "risks": ["主要风险1", "主要风险2"]
-    }},
-    "technical_analysis": {{
-        "trend": "当前趋势判断 (例如: '处于周线级别上升趋势中的日线级别盘整')",
-        "support_levels": ["支撑位1", "支撑位2"],
-        "resistance_levels": ["阻力位1", "阻力位2"],
-        "volume_analysis": "量价关系分析 (50字内)"
-    }},
-    "investment_summary": {{
-        "overall_score": 8.5,
-        "recommendation": "买入/持有/观望/卖出",
-        "time_horizon": "短期/中期/长期",
-        "conclusion": "综合投资建议 (150字内)"
-    }}
+    "background": "公司核心业务简述 (50字)",
+    "financial_health": "财务状况评估 (100字)",
+    "catalysts": ["增长催化剂1", "增长催化剂2", "增长催化剂3"],
+    "risks": ["主要风险1", "主要风险2"],
+    "fundamental_score": 8.0,
+    "summary": "基本面综合评价 (100字)"
 }}
 """
-        
         messages = [{"role": "user", "content": prompt}]
-        result = await self.llm_client.call(messages, temperature=0.2, max_tokens=2500)
+        result = await self.llm_client.call(messages, temperature=0.3, max_tokens=1500)
         
-        if result["success"]:
+        try:
             content = result["content"]
-            try:
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
-                
-                analysis = json.loads(content)
-                # 确保 symbol 字段存在
-                analysis['symbol'] = symbol
-                return analysis
-            except json.JSONDecodeError as e:
-                print(f"   ⚠️  深度分析JSON解析失败: {e}")
-                return {
-                    "symbol": symbol,
-                    "error": "JSON 解析失败",
-                    "raw_content": content[:500]
-                }
-        else:
-            return {
-                "symbol": symbol,
-                "error": result.get('error')
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            return json.loads(content)
+        except Exception as e:
+            print(f"   ⚠️  基本面分析解析失败: {e}")
+            return {"fundamental_score": 0, "summary": "分析失败"}
+
+    async def _analyze_technicals(self, symbol: str, stock_details: Dict[str, Any]) -> Dict[str, Any]:
+        """专门进行技术面分析"""
+        print(f"   📈 [{symbol}] 正在进行技术面分析...")
+        
+        stats = stock_details.get('key_statistics', {})
+        price_info = f"""
+        - 当前价格: {stock_details.get('current_price', 'N/A')}
+        - 昨收/开盘: {stats.get('previous_close')} / {stats.get('open')}
+        - 日内范围: {stats.get('day_range')}
+        - 52周范围: {stats.get('year_range')}
+        - 成交量: {stats.get('volume')} (平均: {stats.get('avg_volume')})
+        - 1年目标价: {stats.get('target_est')}
+        """
+        
+        # 尝试从 page_content 中提取更多即时价格行为描述（如果有）
+        page_snippet = stock_details.get('page_content', '')[:1000]
+        
+        prompt = f"""你是一位顶级美股技术面分析师 (Technical Analyst)。请对 {symbol} 进行深入的技术面分析。
+
+**市场数据:**
+{price_info}
+
+**页面摘要 (辅助判断):**
+{page_snippet}
+
+请分析以下维度:
+1.  **趋势识别**: 结合 52周范围 和 当前价格，判断长期和中期趋势。
+2.  **支撑与阻力**: 基于日内范围和历史数据估算关键位。
+3.  **量价分析**: 成交量是否异常？是否存在量价背离？
+4.  **波动性**: 基于 Beta 和近期范围评估。
+5.  **目标价潜力**: 对比当前价格与 1年目标价。
+
+请返回 JSON 格式:
+{{
+    "trend": "当前趋势判断 (例如: 上升/下降/盘整)",
+    "support_levels": ["支撑位1", "支撑位2"],
+    "resistance_levels": ["阻力位1", "阻力位2"],
+    "volume_analysis": "量价分析 (50字)",
+    "technical_score": 7.5,
+    "summary": "技术面综合评价 (100字)"
+}}
+"""
+        messages = [{"role": "user", "content": prompt}]
+        result = await self.llm_client.call(messages, temperature=0.3, max_tokens=1500)
+        
+        try:
+            content = result["content"]
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            return json.loads(content)
+        except Exception as e:
+            print(f"   ⚠️  技术面分析解析失败: {e}")
+            return {"technical_score": 0, "summary": "分析失败"}
+
+    async def deep_analysis_with_llm(self, stock_details: Dict[str, Any]) -> Dict[str, Any]:
+        """使用 LLM 对单个股票进行深度分析 (分步进行)"""
+        symbol = stock_details['symbol']
+        
+        # 1. 基本面分析
+        fundamental = await self._analyze_fundamentals(symbol, stock_details)
+        
+        # 2. 技术面分析
+        technical = await self._analyze_technicals(symbol, stock_details)
+        
+        # 3. 综合评分与建议
+        f_score = float(fundamental.get('fundamental_score', 0))
+        t_score = float(technical.get('technical_score', 0))
+        
+        # 简单加权: 基本面 60%, 技术面 40% (或者 50/50，视偏好而定)
+        overall_score = round(f_score * 0.6 + t_score * 0.4, 1)
+        
+        recommendation = "观望"
+        if overall_score >= 8.5:
+            recommendation = "强力买入"
+        elif overall_score >= 7.5:
+            recommendation = "买入"
+        elif overall_score >= 6.0:
+            recommendation = "持有"
+        elif overall_score < 4.0:
+            recommendation = "卖出"
+
+        # 构造符合原有结构的返回结果
+        analysis = {
+            "symbol": symbol,
+            "company_name": stock_details.get('symbol'), # 暂时用 symbol 代替
+            "current_price": stock_details.get('current_price', 'N/A'),
+            "target_price": stock_details.get('key_statistics', {}).get('target_est', 'N/A'),
+            "fundamental_analysis": fundamental,
+            "technical_analysis": technical,
+            "investment_summary": {
+                "overall_score": overall_score,
+                "recommendation": recommendation,
+                "time_horizon": "中长期" if f_score > t_score else "短期",
+                "conclusion": f"基本面评分 {f_score}, 技术面评分 {t_score}。{fundamental.get('summary')} {technical.get('summary')}"
             }
+        }
+        
+        return analysis
     
     async def select_top_stocks_with_llm(self, analyzed_stocks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """使用 LLM 从分析过的股票中选出最佳的5只"""
+        """
+        生成市场概览并对所有股票进行排序返回 (不再仅选Top 5)
+        """
         
-        stocks_summary = "\n\n".join([
-            f"**{i+1}. {s.get('symbol')} - {s.get('company_name', 'N/A')}**\n"
+        # 按评分排序
+        sorted_stocks = sorted(
+            analyzed_stocks, 
+            key=lambda s: s.get('investment_summary', {}).get('overall_score', 0), 
+            reverse=True
+        )
+        
+        # 为每只股票添加排名
+        for i, stock in enumerate(sorted_stocks, 1):
+            stock['rank'] = i
+            # 如果没有 selection_reason，使用 conclusion 填充
+            if 'selection_reason' not in stock:
+                stock['selection_reason'] = stock.get('investment_summary', {}).get('conclusion', '')
+
+        # 只把 Top 10 的简要信息发给 LLM 生成市场概览，避免 Context 过长
+        top_10_summary = "\n\n".join([
+            f"**{s.get('symbol')}**\n"
             f"  评分: {s.get('investment_summary', {}).get('overall_score', 0)}/10\n"
             f"  推荐: {s.get('investment_summary', {}).get('recommendation', 'N/A')}\n"
-            f"  背景: {s.get('fundamental_analysis', {}).get('background', 'N/A')}\n"
-            f"  催化剂: {', '.join(s.get('fundamental_analysis', {}).get('catalysts', []))}"
-            for i, s in enumerate(analyzed_stocks)
+            f"  结论: {s.get('investment_summary', {}).get('conclusion', 'N/A')}"
+            for s in sorted_stocks[:10]
         ])
         
-        prompt = f"""你是一位资深的投资组合管理人，请从以下已分析的股票中选出今晚最值得投资的5只：
+        prompt = f"""你是一位资深的投资组合管理人。请基于以下分析过的热门股票（展示前10名），撰写一份简短的市场概览和投资策略。
 
-{stocks_summary}
+{top_10_summary}
 
-请基于以下维度进行综合评估：
-1. **综合评分**: LLM给出的投资分数。
-2.  **基本面**: 公司质量、增长前景和风险。
-3.  **技术面**: 当前趋势和关键价位。
-4.  **催化剂**: 近期事件驱动的可能性。
-5.  **投资组合**: 确保选出的股票具有一定的多样性。
-
-请选出5只股票，并提供：
-- 市场整体分析（100字内）
-- 投资策略建议（150字内）
-- 风险警告（100字内）
+请提供：
+1. **市场整体分析**: 观察这些股票的整体表现，总结当前市场情绪（100字内）。
+2. **投资策略建议**: 基于这些股票的评级分布，给出操作建议（150字内）。
+3. **风险警告**: 提示当前市场的核心风险（100字内）。
 
 以 JSON 格式返回：
 {{
-    "market_overview": "市场整体分析",
-    "top_stocks": [
-        {{
-            "rank": 1,
-            "symbol": "股票代码",
-            "selection_reason": "选择该股的核心理由（80字内）"
-        }},
-        {{
-            "rank": 2,
-            "symbol": "股票代码",
-            "selection_reason": "选择该股的核心理由（80字内）"
-        }},
-        {{
-            "rank": 3,
-            "symbol": "股票代码",
-            "selection_reason": "选择该股的核心理由（80字内）"
-        }},
-        {{
-            "rank": 4,
-            "symbol": "股票代码",
-            "selection_reason": "选择该股的核心理由（80字内）"
-        }},
-        {{
-            "rank": 5,
-            "symbol": "股票代码",
-            "selection_reason": "选择该股的核心理由（80字内）"
-        }}
-    ],
-    "investment_strategy": "投资策略",
-    "risk_warning": "风险警告"
+    "market_overview": "市场整体分析...",
+    "investment_strategy": "投资策略...",
+    "risk_warning": "风险警告..."
 }}
 """
         
         messages = [{"role": "user", "content": prompt}]
-        result = await self.llm_client.call(messages, temperature=0.3, max_tokens=2000)
+        result = await self.llm_client.call(messages, temperature=0.3, max_tokens=1000)
         
+        market_overview = "分析完成"
+        investment_strategy = "请参考个股评级"
+        risk_warning = "股市有风险，投资需谨慎"
+
         if result["success"]:
             content = result["content"]
             try:
@@ -569,41 +673,18 @@ class StockAnalysisAgent(BaseBrowserAgent):
                     content = content.split("```")[1].split("```")[0].strip()
                 
                 selection = json.loads(content)
+                market_overview = selection.get('market_overview', market_overview)
+                investment_strategy = selection.get('investment_strategy', investment_strategy)
+                risk_warning = selection.get('risk_warning', risk_warning)
                 
-                # 合并详细分析
-                top_stocks_full = []
-                for top in selection.get('top_stocks', []):
-                    symbol = top.get('symbol')
-                    # 从 analyzed_stocks 中找到对应的详细分析
-                    full_analysis = next((s for s in analyzed_stocks if s.get('symbol') == symbol), None)
-                    if full_analysis:
-                        full_analysis['rank'] = top.get('rank')
-                        full_analysis['selection_reason'] = top.get('selection_reason')
-                        top_stocks_full.append(full_analysis)
-                
-                # 如果LLM返回的股票数量不足5个，从备选中补充
-                if len(top_stocks_full) < 5:
-                    backup_symbols = [s['symbol'] for s in top_stocks_full]
-                    remaining_stocks = [s for s in analyzed_stocks if s['symbol'] not in backup_symbols]
-                    top_stocks_full.extend(remaining_stocks[:5 - len(top_stocks_full)])
-
-                return {
-                    "market_overview": selection.get('market_overview'),
-                    "top_stocks": top_stocks_full,
-                    "investment_strategy": selection.get('investment_strategy'),
-                    "risk_warning": selection.get('risk_warning')
-                }
             except json.JSONDecodeError as e:
-                print(f"\n⚠️  选股 JSON 解析失败: {e}")
+                print(f"\n⚠️  概览 JSON 解析失败: {e}")
         
-        # Fallback
-        print("⚠️  LLM选股失败或返回格式错误，将按评分选择前5只")
-        top_five = sorted(analyzed_stocks, key=lambda s: s.get('investment_summary', {}).get('overall_score', 0), reverse=True)[:5]
         return {
-            "market_overview": "LLM 调用失败或解析错误",
-            "top_stocks": top_five,
-            "investment_strategy": "请基于列表手动分析",
-            "risk_warning": "由于LLM处理失败，该列表仅基于初步评分生成，未经最终筛选。"
+            "market_overview": market_overview,
+            "top_stocks": sorted_stocks, # 返回所有股票
+            "investment_strategy": investment_strategy,
+            "risk_warning": risk_warning
         }
     
     async def visit_direct_site(self, page: Page, site: Dict[str, str]) -> List[Dict[str, Any]]:
@@ -675,7 +756,8 @@ class StockAnalysisAgent(BaseBrowserAgent):
     async def search_stocks(self, 
                           keywords: List[str] = None, 
                           use_direct_sites: bool = True,
-                          use_search_engines: bool = False) -> Dict[str, Any]:
+                          use_search_engines: bool = False,
+                          fixed_symbols: List[str] = None) -> Dict[str, Any]:
         """
         搜索并分析美股
         
@@ -683,6 +765,7 @@ class StockAnalysisAgent(BaseBrowserAgent):
             keywords: 搜索关键词（用于搜索引擎）
             use_direct_sites: 是否直接访问专业财经网站
             use_search_engines: 是否使用搜索引擎
+            fixed_symbols: 指定分析的股票代码列表
         """
         if keywords is None:
             keywords = [
@@ -693,14 +776,9 @@ class StockAnalysisAgent(BaseBrowserAgent):
         
         print(f"\n{'='*70}")
         print(f"📈 开始美股分析")
-        print(f"🎯 阶段1: 数据收集")
-        if use_direct_sites:
-            print(f"   策略: 直接访问专业财经网站")
-        if use_search_engines:
-            print(f"   策略: 搜索引擎 - {', '.join(keywords)}")
-        print(f"{'='*70}\n")
         
         detailed_stocks = []
+        screened_candidates = []
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -709,54 +787,81 @@ class StockAnalysisAgent(BaseBrowserAgent):
             )
             page = await context.new_page()
 
-            # --- 数据收集 ---
-            try:
-                if use_direct_sites:
-                    direct_stocks = await self.intelligent_browse(page)
-                    for stock in direct_stocks:
-                        if not any(s['symbol'] == stock['symbol'] for s in self.found_stocks):
-                            self.found_stocks.append(stock)
-                
-                if use_search_engines and len(self.found_stocks) < 200: # Changed from 100 to 200
-                    print(f"\n{'─'*70}\n🔍 补充搜索：使用搜索引擎\n{'─'*70}")
-                    for keyword in keywords:
-                        if len(self.found_stocks) >= 200: break # Changed from 120 to 200
-                        print(f"\n🔍 搜索: {keyword}")
-                        search_url = self.build_search_url("Google Finance", keyword)
-                        if await self._goto_with_retry(page, search_url, timeout=60000, max_retries=3):
-                            await asyncio.sleep(3)
-                            html = await page.content()
-                            stocks = self.extract_stock_info(html, page.url)
-                            print(f"📊 找到 {len(stocks)} 个潜在股票代码")
-                            for stock in stocks:
-                                if not any(s['symbol'] == stock['symbol'] for s in self.found_stocks):
-                                    self.found_stocks.append(stock)
-                            await asyncio.sleep(2)
-                        else:
-                            print(f"❌ 搜索失败: {keyword}")
-
-            finally:
-                print(f"\n{'='*70}")
-                print(f"📊 数据收集完成")
-                print(f"   总共找到: {len(self.found_stocks)} 只备选股票")
-                print(f"   访问网站: {len(self.visited_sites)} 个 ({', '.join(self.visited_sites)})")
+            if fixed_symbols:
+                print(f"🎯 模式: 固定关注列表分析")
+                print(f"   关注列表: {', '.join(fixed_symbols)}")
                 print(f"{'='*70}\n")
+                
+                # 直接构造候选列表
+                for symbol in fixed_symbols:
+                    screened_candidates.append({
+                        "symbol": symbol,
+                        "source_url": "User Watchlist",
+                        "found_time": datetime.now().isoformat()
+                    })
+                
+                # 更新 found_stocks 以便记录
+                self.found_stocks = screened_candidates
+                
+            else:
+                print(f"🎯 阶段1: 数据收集")
+                if use_direct_sites:
+                    print(f"   策略: 直接访问专业财经网站")
+                if use_search_engines:
+                    print(f"   策略: 搜索引擎 - {', '.join(keywords)}")
+                print(f"{'='*70}\n")
+                
+                # --- 数据收集 ---
+                try:
+                    if use_direct_sites:
+                        direct_stocks = await self.intelligent_browse(page)
+                        for stock in direct_stocks:
+                            if not any(s['symbol'] == stock['symbol'] for s in self.found_stocks):
+                                self.found_stocks.append(stock)
+                    
+                    if use_search_engines and len(self.found_stocks) < 200: 
+                        print(f"\n{'─'*70}\n🔍 补充搜索：使用搜索引擎\n{'─'*70}")
+                        for keyword in keywords:
+                            if len(self.found_stocks) >= 200: break 
+                            print(f"\n🔍 搜索: {keyword}")
+                            search_url = self.build_search_url("Google Finance", keyword)
+                            if await self._goto_with_retry(page, search_url, timeout=60000, max_retries=3):
+                                await asyncio.sleep(3)
+                                html = await page.content()
+                                stocks = self.extract_stock_info(html, page.url)
+                                print(f"📊 找到 {len(stocks)} 个潜在股票代码")
+                                for stock in stocks:
+                                    if not any(s['symbol'] == stock['symbol'] for s in self.found_stocks):
+                                        self.found_stocks.append(stock)
+                                await asyncio.sleep(2)
+                            else:
+                                print(f"❌ 搜索失败: {keyword}")
 
-            # --- 粗筛选 ---
-            print(f"\n{'='*70}")
-            print(f"🔬 阶段2: 粗筛选 (从 {len(self.found_stocks)} 只中选出 Top 20)")
-            print(f"{'='*70}\n")
-            
-            top_candidates = sorted(
-                self.found_stocks, 
-                key=lambda x: float(x.get('change_percent', '0').replace('%', '').replace('+', '')),
-                reverse=True
-            )[:200] # Changed from 100 to 200
-            screened_candidates = await self.coarse_filter_with_llm(top_candidates)
+                finally:
+                    print(f"\n{'='*70}")
+                    print(f"📊 数据收集完成")
+                    print(f"   总共找到: {len(self.found_stocks)} 只备选股票")
+                    print(f"   访问网站: {len(self.visited_sites)} 个 ({', '.join(self.visited_sites)})")
+                    print(f"{'='*70}\n")
+
+                # --- 粗筛选 ---
+                print(f"\n{'='*70}")
+                print(f"🔬 阶段2: 粗筛选 (从 {len(self.found_stocks)} 只中选出最有潜力的股票)...")
+                print(f"{'='*70}\n")
+                
+                top_candidates = sorted(
+                    self.found_stocks, 
+                    key=lambda x: float(x.get('change_percent', '0').replace('%', '').replace('+', '')),
+                    reverse=True
+                )[:200]
+                screened_candidates = await self.coarse_filter_with_llm(top_candidates)
 
             # --- 深度调研 ---
             print(f"\n{'='*70}")
-            print(f"🔬 阶段3: 深度调研 (分析 Top 20)")
+            if fixed_symbols:
+                print(f"🔬 阶段: 深度调研 (分析关注列表)")
+            else:
+                print(f"🔬 阶段: 深度调研")
             print(f"{'='*70}\n")
             
             for i, stock in enumerate(screened_candidates, 1):
@@ -781,15 +886,15 @@ class StockAnalysisAgent(BaseBrowserAgent):
         print(f"✅ 深度调研完成，成功分析 {len(detailed_stocks)} 只股票")
         print(f"{'='*70}\n")
         
-        # --- 智能选股 ---
+        # --- 智能分析报告 ---
         final_selection = {}
         if detailed_stocks:
             print(f"\n{'='*70}")
-            print(f"🎯 阶段4: 智能选股 (从 {len(detailed_stocks)} 只中选出最佳3只)")
+            print(f"🎯 阶段: 智能分析报告汇总")
             print(f"{'='*70}\n")
             print("🤖 LLM 正在进行最终综合评估...")
             final_selection = await self.select_top_stocks_with_llm(detailed_stocks)
-            print(f"✅ 选股完成! 推荐股票: {len(final_selection.get('top_stocks', []))} 只")
+            print(f"✅ 报告生成完成! 共分析 {len(final_selection.get('top_stocks', []))} 只股票")
         else:
             print("⚠️  没有成功分析的股票，无法进行最终选股。")
             final_selection = {

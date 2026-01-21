@@ -104,22 +104,42 @@ class PaperSearchAgent(BaseBrowserAgent):
         Returns:
             完整的搜索 URL
         """
-        current_year = datetime.now().year
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=self.date_range_days)
+        current_year = end_date.year
+
         engine = next((e for e in self.SEARCH_ENGINES if e['name'] == engine_name), self.SEARCH_ENGINES[0])
         base_url = engine['url']
         
         if engine_name == "Google Scholar":
             # Google Scholar 日期参数: as_ylo (year low) 和 as_yhi (year high)
-            # 只搜索最近2年的论文
-            url = f"{base_url}{quote(query)}&as_ylo={current_year - 1}&as_yhi={current_year}"
+            start_year = current_year
+            # 如果是 1 月，同时也搜索去年的论文
+            if end_date.month == 1:
+                start_year = current_year - 1
+            url = f"{base_url}{quote(query)}&as_ylo={start_year}&as_yhi={current_year}"
         
         elif engine_name == "arXiv":
-            # arXiv 搜索参数 - 按日期排序，只看最新2页（20篇）
-            url = f"{base_url}{quote(query)}&searchtype=all&abstracts=show&order=-announced_date_first&size=20"
+            # arXiv 搜索参数 - 按日期排序 (不再强制限制 submittedDate，避免漏掉刚发布的论文)
+            # start_date_str = start_date.strftime('%Y%m%d%H%M%S')
+            # end_date_str = end_date.strftime('%Y%m%d%H%M%S')
+            # date_query = f"submittedDate:[{start_date_str} TO {end_date_str}]"
+            
+            # 仅使用关键词搜索，依靠排序获取最新
+            full_query = f"{query}"
+            url = f"{base_url}{quote(full_query)}&searchtype=all&abstracts=show&order=-announced_date_first&size=50"
         
         elif engine_name == "Semantic Scholar":
             # Semantic Scholar 支持年份过滤
-            url = f"{base_url}{quote(query)}&year%5B0%5D={current_year - 1}&year%5B1%5D={current_year}"
+            start_year = current_year
+            if end_date.month == 1:
+                start_year = current_year - 1
+            
+            # 如果年份跨度大于1，构造年份参数列表（SS 参数格式为 year[0]=2025&year[1]=2026 或 year=2025-2026）
+            if start_year != current_year:
+                url = f"{base_url}{quote(query)}&year={start_year}-{current_year}"
+            else:
+                url = f"{base_url}{quote(query)}&year={current_year}"
         
         else:
             # Google 或其他搜索引擎，使用基本 URL
@@ -742,6 +762,12 @@ class PaperSearchAgent(BaseBrowserAgent):
                     papers = await self.extract_papers_with_llm(cleaned_html, engine_name, topic)
                     print(f"   ✅ LLM 提取到 {len(papers)} 篇论文")
                     
+                    # 如果 LLM 提取失败，尝试使用传统规则提取
+                    if not papers:
+                        print(f"   ⚠️ LLM 未提取到论文，尝试使用规则提取...")
+                        papers = self.extract_paper_info(html, engine_name)
+                        print(f"   ✅ 规则提取到 {len(papers)} 篇论文")
+                    
                     # 显示提取的论文时间信息（调试用）
                     if papers:
                         print(f"   📅 论文时间范围:")
@@ -778,7 +804,8 @@ class PaperSearchAgent(BaseBrowserAgent):
                         
                         print(f"   评分: {score:.1f}/10 - {decision.get('reason', 'N/A')[:80]}")
                         
-                        if decision_type == "add_to_pool" and score >= self.candidate_pool.min_quality_score:
+                        # Allow "need_more_info" if score is high enough to ensure we collect papers
+                        if (decision_type == "add_to_pool" or decision_type == "need_more_info") and score >= self.candidate_pool.min_quality_score:
                             paper['importance_score'] = score
                             paper['reason'] = decision.get('reason', '')
                             paper['strengths'] = decision.get('strengths', [])
