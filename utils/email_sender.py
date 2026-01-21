@@ -41,17 +41,9 @@ class EmailSender:
         if self.access_key_id and self.access_key_secret:
             self.client = self._create_client()
     
-    def generate_html_email(self, papers: List[Dict[str, Any]], topic: str, date_range: str) -> str:
+    def _generate_detailed_html(self, papers: List[Dict[str, Any]], topic: str, date_range: str) -> str:
         """
-        生成深入详细的 HTML 邮件内容（精选3篇论文，深入讲解）
-        
-        Args:
-            papers: 论文列表（最多3篇）
-            topic: 搜索主题
-            date_range: 日期范围
-            
-        Returns:
-            HTML 字符串
+        生成深入详细的 HTML 邮件内容（精选多篇论文，深入讲解）
         """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -61,48 +53,50 @@ class EmailSender:
 <head>
     <meta charset="UTF-8">
 </head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; padding: 20px; max-width: 800px;">
-    <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
-        学术论文深度解读
+<body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; padding: 20px; max-width: 800px; margin: 0 auto;">
+    <h2 style="color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 10px;">
+        Daily AI Research Update
     </h2>
     
-    <p style="color: #666;">
-        <strong>主题:</strong> {topic}<br>
-        <strong>时间:</strong> {date_range}<br>
-        <strong>精选:</strong> {len(papers)} 篇最有价值的论文
+    <div style="color: #666; font-size: 14px; margin-bottom: 20px;">
+        <p><strong>Topic:</strong> {topic}<br>
+        <strong>Date Range:</strong> {date_range}<br>
+        <strong>Selected Papers:</strong> {len(papers)}</p>
+    </div>
+    
+    <p style="font-size: 15px;">
+        This report summarizes {len(papers)} high-quality research papers selected based on their potential impact and technical insight.
     </p>
     
-    <p style="background: #e8f4f8; padding: 12px; border-left: 4px solid #3498db; font-size: 14px;">
-        本期为您精选了 {len(papers)} 篇高质量论文，每篇都进行了深入解读，包括研究方法、创新点和主要结论。
-    </p>
-    
-    <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+    <div style="border-top: 1px solid #eee; margin: 20px 0;"></div>
 """
         
         for i, paper in enumerate(papers, 1):
             score = paper.get('importance_score', 0)
             authors = ', '.join(paper.get('authors', [])[:3])
             if len(paper.get('authors', [])) > 3:
-                authors += ' 等'
+                authors += ' et al.'
             
             html += f"""
-    <div style="margin: 30px 0; padding: 20px; border: 2px solid #e0e0e0; border-radius: 8px; background: #fafafa;">
-        <h3 style="color: #2c3e50; margin-top: 0;">
+    <div style="margin-bottom: 40px; padding: 10px;">
+        <h3 style="color: #1a73e8; margin-top: 0; margin-bottom: 10px;">
             {i}. {paper.get('title', 'N/A')}
         </h3>
         
-        <p style="color: #666; font-size: 13px; margin: 8px 0;">
-            <strong>作者:</strong> {authors}<br>
-            <strong>评分:</strong> {score:.1f}/10 | <strong>来源:</strong> {paper.get('source', 'N/A')}
-        </p>
+        <div style="color: #5f6368; font-size: 13px; margin-bottom: 15px;">
+            <strong>Authors:</strong> {authors} | 
+            <strong>Score:</strong> {score:.1f}/10 | 
+            <strong>Source:</strong> {paper.get('source', 'N/A')} | 
+            <strong>Updated:</strong> {paper.get('published_date', 'N/A')}
+        </div>
 """
             
             # 核心观点
             if paper.get('summary'):
                 html += f"""
-        <div style="background: #fff; padding: 12px; margin: 15px 0; border-left: 3px solid #27ae60;">
-            <strong style="color: #27ae60;">💡 核心观点</strong>
-            <p style="margin: 8px 0 0 0; font-size: 14px;">{paper.get('summary', 'N/A')}</p>
+        <div style="margin-bottom: 15px;">
+            <strong style="color: #3c4043; display: block; margin-bottom: 5px;">Key Insight:</strong>
+            <p style="margin: 0; font-size: 14px;">{paper.get('summary', 'N/A')}</p>
         </div>
 """
             
@@ -110,11 +104,11 @@ class EmailSender:
             if paper.get('key_methods'):
                 methods = paper.get('key_methods', [])
                 html += f"""
-        <div style="background: #fff; padding: 12px; margin: 15px 0; border-left: 3px solid #3498db;">
-            <strong style="color: #3498db;">🔬 研究方法</strong>
-            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 14px;">
+        <div style="margin-bottom: 15px;">
+            <strong style="color: #3c4043; display: block; margin-bottom: 5px;">Methodology:</strong>
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
 """
-                for method in methods[:4]:  # 最多4个方法
+                for method in methods[:4]:
                     html += f"                <li>{method}</li>\n"
                 html += """            </ul>
         </div>
@@ -124,11 +118,11 @@ class EmailSender:
             if paper.get('innovations'):
                 innovations = paper.get('innovations', [])
                 html += f"""
-        <div style="background: #fff; padding: 12px; margin: 15px 0; border-left: 3px solid #e74c3c;">
-            <strong style="color: #e74c3c;">✨ 主要创新</strong>
-            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 14px;">
+        <div style="margin-bottom: 15px;">
+            <strong style="color: #3c4043; display: block; margin-bottom: 5px;">Innovations:</strong>
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
 """
-                for innovation in innovations[:4]:  # 最多4个创新点
+                for innovation in innovations[:4]:
                     html += f"                <li>{innovation}</li>\n"
                 html += """            </ul>
         </div>
@@ -138,11 +132,11 @@ class EmailSender:
             if paper.get('applications'):
                 applications = paper.get('applications', [])
                 html += f"""
-        <div style="background: #fff; padding: 12px; margin: 15px 0; border-left: 3px solid #f39c12;">
-            <strong style="color: #f39c12;">🎯 应用场景</strong>
-            <ul style="margin: 8px 0 0 0; padding-left: 20px; font-size: 14px;">
+        <div style="margin-bottom: 15px;">
+            <strong style="color: #3c4043; display: block; margin-bottom: 5px;">Applications:</strong>
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
 """
-                for app in applications[:4]:  # 最多4个应用
+                for app in applications[:4]:
                     html += f"                <li>{app}</li>\n"
                 html += """            </ul>
         </div>
@@ -150,13 +144,23 @@ class EmailSender:
             
             # 论文链接
             html += f"""
-        <p style="margin-top: 15px;">
-            <a href="{paper.get('url', '#')}" style="color: #3498db; text-decoration: none; font-weight: bold;">
-                📄 查看论文原文 →
+        <div style="margin-top: 15px;">
+            <a href="{paper.get('url', '#')}" style="color: #1a73e8; text-decoration: none; font-weight: 500; font-size: 14px;">
+                View Original Paper →
             </a>
-        </p>
+        </div>
     </div>
+    <div style="border-top: 1px solid #f1f3f4; margin: 20px 0;"></div>
 """
+        
+        html += f"""
+    <p style="color: #70757a; font-size: 12px; text-align: center; margin-top: 40px;">
+        This automated report was generated on {timestamp}.
+    </p>
+</body>
+</html>
+"""
+        return html
         
         html += f"""
     <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0 20px 0;">
@@ -207,8 +211,8 @@ class EmailSender:
             return False
         
         # 生成 HTML 内容
-        html_content = self.generate_html_email(papers, topic, date_range)
-        subject = f"📚 学术论文推荐: {topic[:30]} ({datetime.now().strftime('%Y-%m-%d')})"
+        html_content = self._generate_detailed_html(papers, topic, date_range)
+        subject = f"Academic Paper Recommendations: {topic[:30]} ({datetime.now().strftime('%Y-%m-%d')})"
         
         # 保存 HTML 到 data 文件夹
         os.makedirs('data', exist_ok=True)

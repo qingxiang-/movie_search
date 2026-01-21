@@ -56,7 +56,7 @@ async def main():
         print(f"   {i}. {keyword}")
     print()
     print("📅 时间范围: 最近一周")
-    print("🎯 目标: 从所有结果中选出最好的 3 篇论文")
+    print("🎯 目标: 从所有结果中选出最好的 10 篇论文")
     print("📊 策略: arXiv 按日期排序，只看最新20篇")
     print()
     print("🚀 开始搜索...")
@@ -65,11 +65,11 @@ async def main():
     # 获取代理配置
     proxy = os.getenv("HTTP_PROXY", "http://127.0.0.1:7890")
     
-    # 创建搜索 Agent（每个关键词收集3篇）
+    # 创建搜索 Agent（每个关键词收集5篇）
     agent = PaperSearchAgent(
         max_iterations=10,
         min_papers=1,
-        max_papers=3,  # 每个关键词最多3篇
+        max_papers=5,  # 每个关键词最多5篇
         min_quality_score=7.0,
         date_range_days=7,
         max_retries=3,
@@ -85,11 +85,11 @@ async def main():
             print(f"🔍 [{i}/{len(search_keywords)}] 搜索关键词: {keyword}")
             print("="*70)
             
-            # 为每个关键词重置候选池，确保独立收集 3 篇
+            # 为每个关键词重置候选池，确保独立收集 5 篇
             from utils.candidate_pool import CandidatePool
             agent.candidate_pool = CandidatePool(
                 min_papers=1,
-                max_papers=3,
+                max_papers=5,
                 min_quality_score=7.0
             )
             
@@ -115,7 +115,7 @@ async def main():
         # 去重
         print("\n🔍 正在去重...")
         from utils.candidate_pool import CandidatePool
-        pool = CandidatePool(min_papers=3, max_papers=100, min_quality_score=7.0)
+        pool = CandidatePool(min_papers=10, max_papers=100, min_quality_score=7.0)
         for paper in all_papers:
             pool.add_paper(paper)
         
@@ -138,15 +138,21 @@ async def main():
         
         print("✅ 总结完成\n")
         
-        # 去重检查
-        print("🔍 正在检查去重...")
-        filtered_papers = agent.dedup_manager.filter_duplicates(papers)
+        # 去重检查 (可配置是否启用历史去重)
+        enable_history_dedup = os.getenv("ENABLE_HISTORY_DEDUP", "false").lower() == "true"
         
-        if not filtered_papers:
-            print("\n⚠️  所有论文都已发送过，无需重复发送")
-            return
-        
-        print(f"✅ 去重完成，剩余 {len(filtered_papers)} 篇论文\n")
+        if enable_history_dedup:
+            print("🔍 正在检查历史去重...")
+            filtered_papers = agent.dedup_manager.filter_duplicates(papers)
+            
+            if not filtered_papers:
+                print("\n⚠️  所有论文都已发送过，无需重复发送")
+                return
+            print(f"✅ 历史去重完成，剩余 {len(filtered_papers)} 篇论文\n")
+        else:
+            print(f"ℹ️  已跳过历史去重 (ENABLE_HISTORY_DEDUP=false)")
+            filtered_papers = papers
+            print(f"✅ 剩余 {len(filtered_papers)} 篇论文\n")
         
         # 时间过滤：只保留 1 周内的论文（LLM 已经解析了时间）
         print("📅 正在过滤时间（只保留 1 周内的论文）...")
@@ -187,12 +193,12 @@ async def main():
             for paper in recent_papers:
                 paper['days_ago'] = 999
         
-        # 按重要性评分排序，选择最有价值的前3篇
+        # 按重要性评分排序，选择最有价值的前10篇
         sorted_papers = sorted(recent_papers, key=lambda x: x.get('importance_score', 0), reverse=True)
-        top_papers = sorted_papers[:3]
+        top_papers = sorted_papers[:10]
         
         print("="*70)
-        print("📊 搜索结果 - 选出最有价值的 3 篇论文")
+        print("📊 搜索结果 - 选出最有价值的 10 篇论文")
         print("="*70)
         
         print(f"\n搜索关键词: {', '.join(search_keywords[:3])} 等 {len(search_keywords)} 组")
@@ -219,7 +225,7 @@ async def main():
         pool.save_to_file(pool_file)
         print(f"\n💾 搜索结果已保存到: {pool_file}")
 
-        # 2. 自动发送邮件（只发送最有价值的前3篇）
+        # 2. 自动发送邮件（只发送最有价值的前10篇）
         email_topic = "AI/LLM 最新研究精选"
         date_range_str = f"{start_date} ~ {end_date}"
 
@@ -230,7 +236,7 @@ async def main():
         )
 
         if success:
-            # 更新已发送记录（只记录发送的3篇）
+            # 更新已发送记录（只记录发送的10篇）
             agent.dedup_manager.add_sent_papers(top_papers, email_topic)
         
         print("\n" + "="*70)

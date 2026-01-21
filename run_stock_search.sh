@@ -21,6 +21,10 @@ if [ -f .env ]; then
   set +a
 fi
 
+# Configure Proxy
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
+
 # Run the python script
 # Assuming python3 is in the path or use /usr/bin/python3
 /usr/bin/python3 stock_search.py >> "$LOG_FILE" 2>&1

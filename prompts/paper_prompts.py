@@ -141,6 +141,7 @@ def get_decision_making_prompt(context: Dict[str, Any]) -> str:
     candidate_count = context.get("candidate_count", 0)
     avg_score = context.get("avg_score", 0.0)
     paper = context.get("paper_info", {})
+    abstract = paper.get('abstract') or 'N/A'
     
     return f"""你是学术论文评估和决策专家。
 
@@ -155,7 +156,7 @@ def get_decision_making_prompt(context: Dict[str, Any]) -> str:
 标题: {paper.get('title', 'N/A')}
 作者: {', '.join(paper.get('authors', [])[:5])}
 单位: {', '.join(paper.get('affiliations', [])[:3])}
-摘要: {paper.get('abstract', 'N/A')[:500]}...
+摘要: {abstract[:500]}...
 引用数: {paper.get('citations', 'N/A')}
 发表时间: {paper.get('published_date', 'N/A')}
 来源: {paper.get('venue', 'N/A')}
