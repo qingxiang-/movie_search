@@ -20,14 +20,13 @@ if [ -f .env ]; then
   set +a
 fi
 
-# Configure Proxy (Adjust if needed on remote)
-# export HTTP_PROXY="http://127.0.0.1:7890"
-# export HTTPS_PROXY="http://127.0.0.1:7890"
+# Configure Proxy
+export HTTP_PROXY="http://127.0.0.1:7890"
+export HTTPS_PROXY="http://127.0.0.1:7890"
 
 # Run the python script
-# Using python3 from path or specific path. 
-# Adjust this line if using a specific conda env on remote, e.g., /home/qingxiang/anaconda3/envs/search/bin/python
-python3 paper_search.py >> "$LOG_FILE" 2>&1
+# Using /usr/bin/python3 for consistency with stock search script on remote
+/usr/bin/python3 paper_search.py >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?
 
