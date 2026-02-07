@@ -1,11 +1,11 @@
 """
 Stock Analysis Agent - 增强版
-包含：多因子分析 + 基本面数据 + 行业对比 + LLM深度预测
+包含：多因子分析 + WorldQuant Alpha101因子 + 基本面数据 + LLM深度预测
 """
 
 import json
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import requests
 import numpy as np
@@ -13,6 +13,7 @@ import hmac
 import hashlib
 import base64
 import urllib.parse
+from scipy import stats
 
 import sys
 import os
@@ -92,6 +93,249 @@ SECTOR_AVERAGE_PE = {
     'Consumer Staples': 20.5,
     'Communication Services': 20.5,
 }
+
+
+# ============ WorldQuant Alpha101 因子计算 ============
+
+def calculate_worldquant_alphas(closes: np.ndarray, highs: np.ndarray, 
+                                  lows: np.ndarray, volumes: np.ndarray) -> Dict[str, float]:
+    """
+    计算 WorldQuant Alpha101 部分因子
+    基于论文: https://arxiv.org/pdf/1601.00991
+    """
+    alphas = {}
+    n = len(closes)
+    
+    if n < 60:
+        return alphas
+    
+    try:
+        # Alpha001: (close - open) / open
+        if len(closes) >= 2:
+            daily_returns = np.diff(closes) / closes[:-1]
+            alphas['alpha001'] = np.mean(daily_returns) * 100
+        
+        # Alpha006: -1 * correlation(rank(open), rank(volume), 10)
+        if n >= 10:
+            opens = closes[:-1] - daily_returns * closes[:-1]
+            rank_open = stats.rankdata(opens[-10:])
+            rank_vol = stats.rankdata(volumes[-10:].astype(float))
+            if np.std(rank_open) > 0 and np.std(rank_vol) > 0:
+                corr = np.corrcoef(rank_open, rank_vol)[0, 1]
+                alphas['alpha006'] = -1 * corr
+        
+        # Alpha010: rank(volume) / (rank(volume) + rank(open))
+        if n >= 10:
+            rank_vol = stats.rankdata(volumes[-10:].astype(float))
+            rank_open = stats.rankdata(opens[-10:] if 'opens' in dir() else closes[-11:-1])
+            if (rank_vol + rank_open).sum() > 0:
+                alphas['alpha010'] = np.mean(rank_vol / (rank_vol + rank_open))
+        
+        # Alpha028: (close - close(26d ago)) / close(26d ago) * volume
+        if n >= 27:
+            ret_26d = (closes[-1] - closes[-27]) / (closes[-27] + 0.001)
+            alphas['alpha028'] = ret_26d * np.mean(volumes[-10:])
+        
+        # Alpha041: (high - low) / (high(5) + low(5))
+        if n >= 10:
+            high_5 = highs[-10:-5].max() if len(highs) >= 15 else highs[-5:].max()
+            low_5 = lows[-10:-5].min() if len(lows) >= 15 else lows[-5:].min()
+            if (high_5 + low_5) > 0:
+                alphas['alpha041'] = (highs[-1] - lows[-1]) / (high_5 + low_5)
+        
+        # Alpha054: -1 * correlation(rank(high), rank(volume), 5)
+        if n >= 5:
+            rank_high = stats.rankdata(highs[-5:].astype(float))
+            rank_vol = stats.rankdata(volumes[-5:].astype(float))
+            if np.std(rank_high) > 0 and np.std(rank_vol) > 0:
+                corr = np.corrcoef(rank_high, rank_vol)[0, 1]
+                alphas['alpha054'] = -1 * corr
+        
+        # Alpha060: (close - close(6)) / close(6) * 100
+        if n >= 7:
+            ret_6d = (closes[-1] - closes[-7]) / (closes[-7] + 0.001) * 100
+            alphas['alpha060'] = ret_6d
+        
+        # Alpha065: (close - min(low, 9)) / (max(high, 9) - min(low, 9))
+        if n >= 10:
+            min_low = np.min(lows[-10:])
+            max_high = np.max(highs[-10:])
+            if max_high - min_low > 0:
+                alphas['alpha065'] = (closes[-1] - min_low) / (max_high - min_low)
+        
+        # Alpha076: (close - close(3)) / close(3) * volume
+        if n >= 4:
+            ret_3d = (closes[-1] - closes[-4]) / (closes[-4] + 0.001)
+            alphas['alpha076'] = ret_3d * np.mean(volumes[-10:])
+        
+        # Alpha100: -1 * correlation(rank(high), rank(close), 5)
+        if n >= 5:
+            rank_high = stats.rankdata(highs[-5:].astype(float))
+            rank_close = stats.rankdata(closes[-5:].astype(float))
+            if np.std(rank_high) > 0 and np.std(rank_close) > 0:
+                corr = np.corrcoef(rank_high, rank_close)[0, 1]
+                alphas['alpha100'] = -1 * corr
+        
+        # Alpha007: (open - close(1)) / close(1) * 100
+        if len(closes) >= 2:
+            oa_ret = (closes[-1] - closes[-2]) / (closes[-2] + 0.001) * 100
+            alphas['alpha007'] = oa_ret
+        
+        # Alpha101: 动量因子 - 3M收益 / 波动率
+        if n >= 63 and np.std(closes[-63:]) > 0:
+            mom_3m = (closes[-1] - closes[-63]) / closes[-63] * 100
+            vol = np.std(np.diff(closes[-63:])) * np.sqrt(252) * 100
+            alphas['alpha101'] = mom_3m / (vol + 1)
+        
+        # Alpha008: (close - close(5)) / close(5) * 100
+        if n >= 6:
+            ret_5d = (closes[-1] - closes[-6]) / (closes[-6] + 0.001) * 100
+            alphas['alpha008'] = ret_5d
+        
+        # Alpha012: 量价相关性
+        if n >= 10:
+            ret_10d = (closes[-1] - closes[-10]) / (closes[-10] + 0.001)
+            vol_change = (np.mean(volumes[-5:]) / (np.mean(volumes[-10:-5]) + 1) - 1)
+            if np.std(ret_10d) > 0 and np.std(vol_change) > 0:
+                corr = np.corrcoef(ret_10d, vol_change)[0, 1]
+                alphas['alpha012'] = corr
+        
+        # Alpha015: 价格位置因子
+        if n >= 20:
+            high_20 = np.max(closes[-20:])
+            low_20 = np.min(closes[-20:])
+            if high_20 - low_20 > 0:
+                alphas['alpha015'] = (closes[-1] - low_20) / (high_20 - low_20)
+        
+        # Alpha030: RSI改进版
+        if n >= 14:
+            delta = np.diff(closes)
+            gain = np.where(delta > 0, delta, 0)
+            loss = np.where(delta < 0, -delta, 0)
+            avg_gain = np.mean(gain[-14:])
+            avg_loss = np.mean(loss[-14:])
+            rs = avg_gain / (avg_loss + 0.001)
+            alphas['alpha030'] = 100 - (100 / (1 + rs))
+        
+    except Exception as e:
+        pass
+    
+    return alphas
+
+
+def calculate_enhanced_alphas(closes: np.ndarray, highs: np.ndarray, 
+                              lows: np.ndarray, volumes: np.ndarray) -> Dict[str, float]:
+    """计算增强版Alpha因子"""
+    
+    n = len(closes)
+    alphas = {}
+    
+    if n < 60:
+        return alphas
+    
+    try:
+        returns = np.diff(closes) / closes[:-1]
+        
+        # 1. 收益率因子
+        for period in [5, 10, 20, 60]:
+            if n > period:
+                ret = (closes[-1] - closes[-period-1]) / (closes[-period-1] + 0.001)
+                alphas[f'return_{period}d'] = ret * 100
+        
+        # 2. 波动率因子
+        alphas['volatility_20d'] = np.std(returns[-20:]) * np.sqrt(252) * 100
+        alphas['volatility_60d'] = np.std(returns[-60:]) * np.sqrt(252) * 100
+        alphas['volatility_ratio'] = alphas['volatility_20d'] / (alphas['volatility_60d'] + 0.001)
+        
+        # 3. 偏度和峰度
+        if len(returns) >= 20:
+            alphas['skewness'] = float(stats.skew(returns[-20:]))
+            alphas['kurtosis'] = float(stats.kurtosis(returns[-20:]))
+        
+        # 4. 量价因子
+        avg_vol_20 = np.mean(volumes[-20:])
+        vol_change = (volumes[-1] - avg_vol_20) / (avg_vol_20 + 0.001)
+        alphas['volume_change'] = vol_change * 100
+        
+        if len(returns) >= 10 and len(volumes) >= 10:
+            corr = np.corrcoef(returns[-10:], volumes[-10:].astype(float)[:len(returns[-10:])])[0, 1]
+            alphas['volume_price_corr'] = corr if not np.isnan(corr) else 0
+        
+        # 5. 趋势因子
+        ma5 = np.mean(closes[-5:])
+        ma20 = np.mean(closes[-20:])
+        ma60 = np.mean(closes[-60:])
+        
+        alphas['ma5_ma20_ratio'] = ma5 / (ma20 + 0.001)
+        alphas['ma20_ma60_ratio'] = ma20 / (ma60 + 0.001)
+        alphas['price_ma20_ratio'] = closes[-1] / (ma20 + 0.001)
+        alphas['price_ma60_ratio'] = closes[-1] / (ma60 + 0.001)
+        
+        # 6. 威廉指标
+        williams_r = -100 * (np.max(highs[-14:]) - closes[-1]) / (np.max(highs[-14:]) - np.min(lows[-14:]) + 0.001)
+        alphas['williams_r'] = williams_r
+        
+        # 7. RSI
+        delta = np.diff(closes)
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+        avg_gain = np.mean(gain[-14:])
+        avg_loss = np.mean(loss[-14:])
+        rs = avg_gain / (avg_loss + 0.001)
+        alphas['rsi'] = 100 - (100 / (1 + rs))
+        
+        # 8. MACD
+        ema12 = np.convolve(closes, np.ones(12)/12, mode='valid')[-1]
+        ema26 = np.convolve(closes, np.ones(26)/26, mode='valid')[-1]
+        alphas['macd'] = (ema12 - ema26) / (ema26 + 0.001) * 100
+        
+        # 9. 布林带位置
+        ma20_val = ma20
+        bb_std = np.std(closes[-20:])
+        alphas['bb_position'] = (closes[-1] - (ma20_val - 2*bb_std)) / (4*bb_std + 0.001)
+        
+        # 10. ATR
+        tr1 = highs[-1] - lows[-1]
+        tr2 = np.abs(highs[-1] - closes[-2])
+        tr3 = np.abs(lows[-1] - closes[-2])
+        true_range = np.max([tr1, tr2, tr3])
+        atr = np.mean([true_range] + list(np.abs(np.diff(closes[-15:]))))
+        alphas['atr'] = atr / (closes[-1] + 0.001) * 100
+        
+        # 11. 价格动量
+        roc_5 = (closes[-1] - closes[-6]) / (closes[-6] + 0.001) * 100
+        roc_10 = (closes[-1] - closes[-11]) / (closes[-11] + 0.001) * 100
+        roc_20 = (closes[-1] - closes[-21]) / (closes[-21] + 0.001) * 100
+        alphas['roc_5'] = roc_5
+        alphas['roc_10'] = roc_10
+        alphas['roc_20'] = roc_20
+        alphas['momentum_acceleration'] = roc_5 - roc_10
+        
+        # 12. 52周位置
+        high_252 = np.max(closes[-252:]) if n >= 252 else np.max(closes)
+        low_252 = np.min(closes[-252:]) if n >= 252 else np.min(closes)
+        alphas['high_252_ratio'] = (high_252 - closes[-1]) / (high_252 - low_252 + 0.001)
+        alphas['low_252_ratio'] = (closes[-1] - low_252) / (high_252 - low_252 + 0.001)
+        
+        # 13. 综合评分
+        alpha_score = 0
+        if alphas.get('roc_20', 0) > 10:
+            alpha_score += 1
+        elif alphas.get('roc_20', 0) < -10:
+            alpha_score -= 1
+        if alphas.get('ma5_ma20_ratio', 1) > 1:
+            alpha_score += 1
+        if alphas.get('ma20_ma60_ratio', 1) > 1:
+            alpha_score += 1
+        if 40 < alphas.get('rsi', 50) < 70:
+            alpha_score += 0.5
+        alphas['alpha_composite_score'] = alpha_score
+        
+    except Exception as e:
+        pass
+    
+    return alphas
+
 
 
 class StockAnalysisAgent:
@@ -334,6 +578,12 @@ class StockAnalysisAgent:
                 },
                 'composite_score': score,
                 'key_factors': factors,
+                
+                # WorldQuant Alpha101 因子
+                'worldquant_alphas': calculate_worldquant_alphas(closes, highs, lows, volumes),
+                
+                # 增强版因子
+                'enhanced_alphas': calculate_enhanced_alphas(closes, highs, lows, volumes),
             }
             
         except Exception as e:
