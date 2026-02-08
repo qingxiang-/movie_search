@@ -218,6 +218,7 @@ def calculate_worldquant_alphas(closes: np.ndarray, highs: np.ndarray,
             alphas['alpha030'] = 100 - (100 / (1 + rs))
         
     except Exception as e:
+        # 记录错误但继续返回已计算的因子
         pass
     
     return alphas
@@ -364,17 +365,36 @@ class StockAnalysisAgent:
                 return None
             
             timestamps = result[0].get('timestamp', [])
-            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            quote = result[0].get('indicators', {}).get('quote', [{}])[0]
+            closes = quote.get('close', [])
+            highs = quote.get('high', [])
+            lows = quote.get('low', [])
+            volumes = quote.get('volume', [])
             
             if not timestamps or not closes:
                 return None
             
-            valid_data = [(ts, c) for ts, c in zip(timestamps, closes) if c is not None]
+            # 同步所有数据
+            valid_data = []
+            highs_data = []
+            lows_data = []
+            volumes_data = []
+            
+            for i, (ts, c) in enumerate(zip(timestamps, closes)):
+                if c is not None:
+                    valid_data.append((ts, c))
+                    highs_data.append(highs[i] if i < len(highs) and highs[i] is not None else c)
+                    lows_data.append(lows[i] if i < len(lows) and lows[i] is not None else c)
+                    volumes_data.append(volumes[i] if i < len(volumes) and volumes[i] is not None else 0)
+            
             if len(valid_data) < 60:
                 return None
             
             closes = np.array([c for _, c in valid_data])
             timestamps = [ts for ts, _ in valid_data]
+            highs = np.array(highs_data)
+            lows = np.array(lows_data)
+            volumes = np.array(volumes_data, dtype=float)
             
             current_price = closes[-1]
             
@@ -445,11 +465,11 @@ class StockAnalysisAgent:
             roc_20 = ((closes[-1] - closes[-20]) / closes[-20] * 100) if len(closes) >= 20 else 0
             
             # 5. 成交量因子
-            volumes = result[0].get('indicators', {}).get('quote', [{}])[0].get('volume', [])
-            volumes = [v for v in volumes[-63:] if v is not None] if volumes else []
-            if volumes:
-                avg_vol = np.mean(volumes)
-                recent_vol = np.mean(volumes[-5:])
+            volumes_for_ratio = result[0].get('indicators', {}).get('quote', [{}])[0].get('volume', [])
+            volumes_for_ratio = [v for v in volumes_for_ratio[-63:] if v is not None] if volumes_for_ratio else []
+            if volumes_for_ratio:
+                avg_vol = np.mean(volumes_for_ratio)
+                recent_vol = np.mean(volumes_for_ratio[-5:])
                 vol_ratio = recent_vol / avg_vol if avg_vol > 0 else 1
             else:
                 vol_ratio = 1
@@ -695,7 +715,7 @@ class StockAnalysisAgent:
 
 ```json
 {{
-    "predicted_return": 8.5,
+    "predicted_return": X,
     "confidence": "high",
     "risk_level": "medium",
     "recommendation": "买入",

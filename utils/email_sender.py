@@ -7,6 +7,16 @@ import yaml
 from datetime import datetime
 from typing import List, Dict, Any
 
+# 加载 .env 文件（如果存在）
+dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+if os.path.exists(dotenv_path):
+    with open(dotenv_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                os.environ.setdefault(key.strip(), value.strip())
+
 from alibabacloud_dm20151123.client import Client as Dm20151123Client
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_dm20151123 import models as dm_20151123_models
@@ -519,17 +529,61 @@ class EmailSender:
         if not self.access_key_id or not self.access_key_secret:
             print("❌ 阿里云 AccessKey 未配置")
             return False
-        
+
         if not self.sender_email:
             print("❌ 发件人地址未配置")
             return False
-        
+
         if not self.recipients:
             print("❌ 收件人列表为空")
             return False
-        
+
         print(f"✅ 邮件配置检查通过")
         print(f"   发件人: {self.sender_email}")
         print(f"   收件人: {', '.join(self.recipients)}")
         print(f"   区域: {self.region}")
         return True
+
+    def send_email_report(self, html_content: str, subject: str = None) -> bool:
+        """
+        发送HTML报告邮件（简单接口）
+
+        Args:
+            html_content: HTML邮件内容
+            subject: 邮件主题（可选）
+
+        Returns:
+            是否发送成功
+        """
+        if not self.client:
+            print("❌ 阿里云邮件客户端未初始化，请检查 .env 文件")
+            return False
+
+        if not self.sender_email:
+            print("❌ 未配置发件人，请检查 email_config.yaml")
+            return False
+
+        if not self.recipients:
+            print("❌ 未配置收件人，请检查 email_config.yaml")
+            return False
+
+        # 使用默认主题
+        if not subject:
+            from datetime import datetime
+            subject = f"Alpha158 选股报告 ({datetime.now().strftime('%Y-%m-%d')})"
+
+        # 发送给每个收件人
+        success_count = 0
+        for recipient in self.recipients:
+            try:
+                if self._send_to_recipient(recipient, subject, html_content):
+                    success_count += 1
+            except Exception as e:
+                print(f"❌ 发送到 {recipient} 失败: {e}")
+
+        if success_count > 0:
+            print(f"✅ 邮件发送成功！发送到 {success_count}/{len(self.recipients)} 个收件人")
+            return True
+        else:
+            print(f"❌ 所有邮件发送失败")
+            return False
