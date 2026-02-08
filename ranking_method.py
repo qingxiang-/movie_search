@@ -455,17 +455,55 @@ Alpha158 因子得分: {row['score']:.3f}
 
         except Exception as e:
             print(f"   ❌ 分析失败: {e}")
-            # 创建占位分析
-            results.append({
-                'symbol': symbol,
-                'rank': i,
-                'overview': f'{symbol} 分析暂时不可用',
-                'latest_news': ['数据获取中...'],
-                'highlights': ['量化因子表现优异'],
-                'risks': ['请稍后重试'],
-                'outlook': '待更新',
-                'recommendation': '持有'
-            })
+
+            # 重试一次（sleep 5秒）
+            if '已重试' not in str(e):  # 避免无限重试
+                print(f"   🔄 5秒后重试...")
+                import time
+                time.sleep(5)
+
+                try:
+                    response = requests.post(url, json=data, headers=headers, timeout=60)
+                    response.raise_for_status()
+                    result = response.json()
+
+                    content = result["choices"][0]["message"]["content"]
+
+                    if "```json" in content:
+                        content = content.split("```json")[1].split("```")[0].strip()
+                    elif "```" in content:
+                        content = content.split("```")[1].split("```")[0].strip()
+
+                    analysis = json.loads(content)
+                    analysis['symbol'] = symbol
+                    analysis['rank'] = i
+                    results.append(analysis)
+                    print(f"   ✅ 重试成功")
+                except Exception as retry_e:
+                    print(f"   ❌ 重试失败: {retry_e}")
+                    # 创建占位分析
+                    results.append({
+                        'symbol': symbol,
+                        'rank': i,
+                        'overview': f'{symbol} 分析暂时不可用',
+                        'latest_news': ['数据获取中...'],
+                        'highlights': ['量化因子表现优异'],
+                        'risks': ['请稍后重试'],
+                        'outlook': '待更新',
+                        'recommendation': '持有'
+                    })
+            else:
+                # 创建占位分析
+                results.append({
+                    'symbol': symbol,
+                    'rank': i,
+                    'overview': f'{symbol} 分析暂时不可用',
+                    'latest_news': ['数据获取中...'],
+                    'highlights': ['量化因子表现优异'],
+                    'risks': ['请稍后重试'],
+                    'outlook': '待更新',
+                    'recommendation': '持有'
+                })
 
     print(f"\n✅ TOP 5 分析完成，成功 {len(results)}/5")
     return results
