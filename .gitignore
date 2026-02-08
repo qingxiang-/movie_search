@@ -50,3 +50,21 @@ Thumbs.db
 data/
 *.json
 *.html
+
+# Debug folders
+debug_captcha/
+debug_simple/
+debug_*/
+
+# Test scripts in root (keep tests/ folder)
+test_*.py
+*_test.py
+
+# Temporary scripts
+add_alphas.py
+integrate_alphas.py
+update_prompt.py
+
+# Debug images
+*.png
+!assets/**/*.png

@@ -25,3 +25,6 @@ alibabacloud-dm20151123==1.8.1
 alibabacloud-credentials>=0.3.0
 alibabacloud-tea-openapi>=0.3.0
 alibabacloud-tea-util>=0.3.0
+
+# 图片处理 - 用于 GPT Vision 截图处理
+Pillow>=10.0.0

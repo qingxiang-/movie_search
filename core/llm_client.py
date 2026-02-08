@@ -29,25 +29,27 @@ class LLMClient:
         # 获取 LLM 提供商配置
         self.provider = os.getenv("LLM_PROVIDER", "qwen").lower()
         
-        # Qwen 配置
-        self.base_url = base_url or os.getenv("DASHSCOPE_BASE_URL", 
-                                               "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
-        self.model = model or os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
-        self.http_client = httpx.AsyncClient(timeout=timeout)
-        
-        # Azure OpenAI 配置
+        # Azure OpenAI 配置 (必须放在其他导入之前)
         if self.provider == "azure":
             azure_api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
             azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-            azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+            azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
             self.azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
             
+            # 设置 Azure 配置
             if azure_api_key:
                 openai.api_type = "azure"
                 openai.api_key = azure_api_key
-                openai.api_base = azure_endpoint
+                openai.api_base = azure_endpoint.rstrip('/') if azure_endpoint else ""
                 openai.api_version = azure_api_version
+        else:
+            # Qwen 配置
+            self.base_url = base_url or os.getenv("DASHSCOPE_BASE_URL", 
+                                                   "https://dashscope.aliyuncs.com/compatible-mode/v1")
+            self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
+            self.model = model or os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
+        
+        self.http_client = httpx.AsyncClient(timeout=timeout)
     
     async def close(self):
         """关闭 HTTP 客户端"""
@@ -69,46 +71,48 @@ class LLMClient:
             {"success": bool, "content": str} 或 {"success": bool, "error": str}
         """
         try:
-            if self.provider == "azure":
-                # 调用 Azure OpenAI (使用 openai v0.28.1 API)
-                # 注意：某些 Azure 模型可能不支持 max_tokens，改用 max_completion_tokens
-                try:
-                    response = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: openai.ChatCompletion.create(
-                            engine=self.azure_deployment,
-                            messages=messages,
-                            temperature=temperature,
-                            # 不传 max_tokens，让模型自动决定
-                        )
+            # 重新加载环境变量以确保最新配置
+            from dotenv import load_dotenv
+            load_dotenv('.env')
+
+            provider = os.getenv("LLM_PROVIDER", "qwen").lower()
+
+            if provider == "azure":
+                # 确保 Azure 配置正确
+                azure_api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
+                azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+                azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+                azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
+
+                openai.api_type = "azure"
+                openai.api_key = azure_api_key
+                openai.api_base = azure_endpoint.rstrip('/') if azure_endpoint else ""
+                openai.api_version = azure_api_version
+
+                # 调用 Azure OpenAI (不传 max_tokens，让模型自动决定)
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: openai.ChatCompletion.create(
+                        engine=azure_deployment,
+                        messages=messages,
+                        temperature=temperature,
                     )
-                    content = response.choices[0].message["content"]
-                    return {"success": True, "content": content}
-                except Exception as e:
-                    error_msg = str(e)
-                    if "max_tokens" in error_msg or "max_completion_tokens" in error_msg:
-                        # 如果是参数问题，重试不带 max_tokens
-                        response = await asyncio.get_event_loop().run_in_executor(
-                            None,
-                            lambda: openai.ChatCompletion.create(
-                                engine=self.azure_deployment,
-                                messages=messages,
-                                temperature=temperature
-                            )
-                        )
-                        content = response.choices[0].message["content"]
-                        return {"success": True, "content": content}
-                    else:
-                        raise
+                )
+                content = response.choices[0].message["content"]
+                return {"success": True, "content": content}
             else:
                 # 调用 Qwen API
-                url = f"{self.base_url}/chat/completions"
+                base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+                api_key = os.getenv("DASHSCOPE_API_KEY", "")
+                model = os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
+                
+                url = f"{base_url}/chat/completions"
                 headers = {
-                    "Authorization": f"Bearer {self.api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 }
                 data = {
-                    "model": self.model,
+                    "model": model,
                     "messages": messages,
                     "temperature": temperature,
                 }
