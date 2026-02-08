@@ -1,287 +1,100 @@
-# LLM 智能搜索工具集
+# Alpha158 Multi-Factor Stock Selection System
 
-基于 LLM 的智能浏览器自动化工具，使用大语言模型规划浏览器操作，支持电影、论文和股票信息的智能搜索。
+美股科技股多因子选股系统，基于Alpha158因子库
 
-## 核心设计理念
+## 📊 Features
 
-与传统硬编码爬虫不同，本工具使用 **LLM 作为决策核心**，动态规划搜索路径：
+### Core: Alpha158 Factor Library
+- **154 technical factors** across 5 batches
+- Batch 1: Trend & Momentum (SMA, EMA, RSI, MACD, BB, ATR, ADX, Stochastic)
+- Batch 2: Returns & Momentum (price changes, drawdowns, CCI, Williams %R)
+- Batch 3: Volatility & Volume (VWAP, OBV, AD, CMF, EVM)
+- Batch 4: Statistics & Quality (skewness, kurtosis, Sharpe, Sortino, Treynor)
+- Batch 5: Composite Factors (alpha composite, trend strength, quality factor)
+
+### ML Models
+- **RandomForest** classifier (57.5% accuracy)
+- **GradientBoosting** classifier
+- No future leakage with time-based train/test split
+- Feature importance analysis
+
+### Ranking Method
+- **Z-score normalized** multi-factor scoring
+- Configurable factor weights
+- Top-N stock selection
+
+## 📁 Files
 
 ```
-┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│  浏览器页面  │ ──> │  LLM 规划器  │ ──> │  动作执行器  │
-│  (HTML)     │      │  (决策下一步)│      │  (操作浏览器)│
-└─────────────┘      └─────────────┘      └─────────────┘
-       ↑                                        │
-       └──────────────── 迭代循环 ◄──────────────┘
+alpha158.py              # Core factor library
+ml_dataset_builder_v4.py # Dataset builder
+ml_train_sklearn.py      # ML training
+ranking_method.py        # Ranking strategy
+ranking_top20.csv       # Results
 ```
 
-### 工作流程
-
-1. **初始搜索** - 在搜索引擎（百度/Bing）搜索 `{电影名} magnet 下载`
-2. **页面分析** - 提取页面内容、链接列表、magnet links
-3. **LLM 决策** - 将上下文信息发送给 LLM，规划下一步操作
-4. **执行动作** - 执行 LLM 决策的操作（点击/搜索/翻页/返回等）
-5. **迭代优化** - 重复步骤 2-4，直到找到足够的 magnet links 或达到最大迭代次数
-6. **智能推荐** - 使用 LLM 分析并推荐最佳下载源
-
-## 功能特性
-
-### LLM 智能导航
-
-- **动态决策** - LLM 根据页面实时内容决定下一步操作
-- **多动作支持** - 点击链接、搜索、翻页、返回、滚动、更改搜索词等
-- **上下文感知** - 记住搜索历史和已发现的 magnet links
-- **自适应策略** - 根据页面情况自动调整搜索策略
-
-### 搜索能力
-
-- 支持通用搜索引擎（百度、Bing）
-- 自动提取页面核心内容（过滤广告/脚本/样式）
-- 智能识别可点击的链接
-- 自动去重 magnet links
-
-### 安全可靠
-
-- 使用无头浏览器（Chromium headless）
-- 可配置最大迭代次数（默认 15 次）
-- 找到 5 个 magnet links 后自动停止
-- 异常处理和错误恢复机制
-
-## 安装
-
-### 1. 安装 Python 依赖
+## 🚀 Quick Start
 
 ```bash
-pip install -r requirements.txt
+# Install dependencies
+pip install pandas pandas-ta scikit-learn xgboost
+
+# Run ranking method
+python ranking_method.py
+
+# Train ML model
+python ml_train_sklearn.py
 ```
 
-### 2. 安装 Playwright 浏览器
+## 📈 Results
 
-```bash
-playwright install chromium
-```
+### ML Model Performance
+| Model | Accuracy | F1 |
+|-------|----------|-----|
+| RandomForest | 57.5% | 0.54 |
+| GradientBoosting | 57.5% | 0.55 |
 
-### 3. 配置环境变量
+### Top 5 Stocks (Ranking Method)
+1. TSLA (score: 1.155)
+2. AAPL (score: 0.703)
+3. AVGO (score: 0.592)
+4. AMZN (score: 0.374)
+5. GOOGL (score: 0.372)
 
-```bash
-# 复制模板文件
-cp .env.example .env
-
-# 编辑 .env 文件，填入真实的 API Key
-```
-
-在 `.env` 文件中配置：
-
-```bash
-# Qwen API 配置（必需）
-DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-DASHSCOPE_API_KEY=sk-your-api-key-here
-DASHSCOPE_MODEL=qwen-flash-2025-07-28
-```
-
-> **注意**: LLM 智能导航功能需要 API Key 才能运行
-
-## 使用方法
-
-```bash
-python movie_search.py
-```
-
-程序会提示输入电影名称，例如：
-
-```
-请输入要搜索的电影名称: 利刃出鞘3
-```
-
-### 搜索示例
-
-```
-======================================================================
-🎬 开始智能搜索电影: 利刃出鞘3
-======================================================================
-
-🔍 初始搜索: 利刃出鞘3 magnet 下载
-
-──────────────────────────────────────────────────────────────────────
-📍 迭代 1/15
-──────────────────────────────────────────────────────────────────────
-🧲 当前页面 magnet links: 0 (累计: 0)
-
-🤖 正在咨询 LLM 规划下一步操作...
-
-📋 LLM 决策: 点击搜索结果中最相关的链接
-🔗 点击链接: 利刃出鞘3 电影下载...
-
-──────────────────────────────────────────────────────────────────────
-📍 迭代 2/15
-──────────────────────────────────────────────────────────────────────
-🧲 当前页面 magnet links: 3 (累计: 3)
-
-🤖 正在咨询 LLM 规划下一步操作...
-
-📋 LLM 决策: 提取 magnet links 并完成搜索
-✅ 提取 magnet links 并完成搜索
-
-======================================================================
-🎉 搜索完成! 共找到 5 个 magnet links
-======================================================================
-```
-
-### LLM 推荐
-
-搜索完成后，可选择让 LLM 推荐最佳下载源：
-
-```
-是否需要 LLM 推荐最佳下载源? (y/n): y
-
-🤖 正在分析并推荐最佳 magnet link...
-
-💡 LLM 推荐:
-  最佳匹配: magnet:?xt=urn:btih:...
-  理由: 包含完整电影名，1080p 高清，文件大小 2.3GB 合理
-  质量: 1080p
-  置信度: 高
-```
-
-## LLM 支持的操作
-
-| 操作 | 说明 | 参数 |
-|------|------|------|
-| `click_link` | 点击页面中的某个链接 | `link_index` (链接索引) |
-| `search` | 在搜索引擎搜索新关键词 | `query`, `engine_index` |
-| `scroll` | 向下滚动页面查看更多内容 | 无 |
-| `back` | 返回上一页 | 无 |
-| `next_page` | 翻到下一页 | 无 |
-| `change_query` | 更改搜索词重新搜索 | `query` (新搜索词) |
-| `extract_magnets` | 提取 magnet links 并完成 | 无 |
-| `stop` | 停止搜索 | 无 |
-
-## 技术架构
-
-```
-movie_search.py
-├── MovieSearcher (主类)
-│   ├── plan_next_action()      # LLM 规划下一步操作
-│   ├── execute_action()         # 执行浏览器操作
-│   ├── extract_page_content()   # 提取页面核心内容
-│   ├── extract_links()          # 提取可点击链接
-│   ├── extract_magnet_links()   # 提取 magnet links
-│   └── analyze_with_llm()       # LLM 分析推荐最佳资源
-└── main()                       # 入口函数
-```
-
-## 依赖项
-
-- **playwright** - 无头浏览器自动化
-- **httpx** - 异步 HTTP 客户端（调用 Qwen API）
-- **python-dotenv** - 环境变量管理
-- **beautifulsoup4** - HTML 解析和内容提取
-
-## 配置说明
-
-### 调整最大迭代次数
+## 🔧 Factor Configuration
 
 ```python
-searcher = MovieSearcher(max_iterations=20)  # 默认 15
+FACTOR_CONFIG = {
+    # Momentum (positive)
+    'momentum_3m': 0.10,
+    'momentum_6m': 0.15,
+    
+    # Quality (positive)
+    'sharpe_ratio_20d': 0.10,
+    'win_rate_20d': 0.05,
+    
+    # Trend (positive)
+    'trend_strength': 0.08,
+    'alpha_composite': 0.05,
+    
+    # Risk (negative = lower is better)
+    'volatility_20d': -0.05,
+    'max_drawdown_20d': -0.03,
+}
 ```
 
-### 调整自动停止条件
+## 📊 Data Source
 
-```python
-# 在 search_movie() 方法中修改
-if len(self.found_magnets) >= 5:  # 默认找到 5 个后停止
-```
+- Yahoo Finance API
+- 20 US tech stocks
+- Quarterly sampling (2023-2024)
 
-## 注意事项
+## 🔒 No Future Leakage
 
-1. **API Key 安全**
-   - `.env` 文件已被 `.gitignore` 忽略
-   - 不要将 API Key 提交到 Git 仓库
+- Train period: 2023 Q1 - 2024 Q2
+- Test period: 2024 Q3 - 2024 Q4
+- All factors computed using only historical data
 
-2. **网络环境**
-   - 需要能访问搜索引擎和目标网站
-   - 如果网络受限，可能需要配置代理
-
-3. **资源消耗**
-   - 每次搜索会进行多次 LLM API 调用
-   - 建议使用 Qwen Flash 等经济模型
-   - 注意 API 调用额度
-
-4. **法律合规**
-   - 本工具仅供学习和研究使用
-   - 请遵守当地法律法规，尊重版权
-
-## 故障排除
-
-### 问题：LLM 返回非 JSON 格式
-
-```
-❌ LLM 规划失败: JSON 解析失败
-```
-
-**解决**: 程序会自动使用默认策略（点击第一个链接）继续运行
-
-### 问题：未找到 magnet links
-
-**建议**:
-- 尝试更改电影名称（中文名/英文名/年份）
-- 检查网络连接是否正常
-- 增加最大迭代次数
-
-### 问题：浏览器启动失败
-
-```
-playwright install chromium
-```
-
-重新安装 Chromium 浏览器
-
-## 功能模块
-
-### 1. 电影搜索 (Movie Search)
-
-智能搜索电影 magnet 下载链接，支持自动识别和提取磁力链接。
-
-**使用方法**:
-```bash
-python movie_search.py
-```
-
-**特性**:
-- 自动搜索电影 magnet 链接
-- LLM 智能推荐最佳下载源
-- 支持多个搜索引擎切换
-
-### 2. 论文搜索 (Paper Search)
-
-智能搜索学术论文，支持从多个学术数据库获取论文信息。
-
-**使用方法**:
-```bash
-python paper_search.py
-```
-
-**特性**:
-- 支持按关键词、作者、年份搜索
-- 自动提取论文元数据（标题、作者、摘要、链接）
-- LLM 智能推荐相关论文
-- 支持 PDF 下载链接识别
-
-### 3. 股票搜索 (Stock Search)
-
-智能搜索股票信息和市场数据。
-
-**使用方法**:
-```bash
-python stock_search.py
-```
-
-**特性**:
-- 实时股票价格查询
-- 公司基本信息获取
-- 市场新闻和分析
-- LLM 智能分析股票信息
-
-## License
+## 📝 License
 
 MIT License
