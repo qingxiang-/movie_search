@@ -74,22 +74,22 @@ class LLMClient:
             # 重新加载环境变量以确保最新配置
             from dotenv import load_dotenv
             load_dotenv('.env')
-            
+
             provider = os.getenv("LLM_PROVIDER", "qwen").lower()
-            
+
             if provider == "azure":
                 # 确保 Azure 配置正确
                 azure_api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
                 azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
                 azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
                 azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4")
-                
+
                 openai.api_type = "azure"
                 openai.api_key = azure_api_key
                 openai.api_base = azure_endpoint.rstrip('/') if azure_endpoint else ""
                 openai.api_version = azure_api_version
-                
-                # 调用 Azure OpenAI
+
+                # 调用 Azure OpenAI (不传 max_tokens，让模型自动决定)
                 response = await asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: openai.ChatCompletion.create(
