@@ -28,3 +28,6 @@ alibabacloud-tea-util>=0.3.0
 
 # 图片处理 - 用于 GPT Vision 截图处理
 Pillow>=10.0.0
+
+# 技术指标计算
+pandas_ta>=0.3.0

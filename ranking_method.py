@@ -779,7 +779,7 @@ def run_analysis(stock_pool: list = TECH_100, period_days: int = 365):
         print(f"   {i+1:2d}. {factor:<30} {direction}{abs(weight):.3f}")
 
     # 保存结果
-    df_result.to_csv('/Users/wangqingxiang/.openclaw/workspace/ranking_top100.csv')
+    df_result.to_csv('ranking_top100.csv')
     print(f"\n💾 结果已保存: ranking_top100.csv")
 
     # 对 TOP 5 进行 LLM 深度分析
@@ -789,7 +789,7 @@ def run_analysis(stock_pool: list = TECH_100, period_days: int = 365):
     # 发送邮件（包含 TOP 5 分析）
     html = send_email_report(df_result, top20, top5_analysis)
     if html:
-        with open('/Users/wangqingxiang/.openclaw/workspace/ranking_report.html', 'w') as f:
+        with open('ranking_report.html', 'w') as f:
             f.write(html)
         print(f"📧 邮件报告已保存: ranking_report.html")
 
