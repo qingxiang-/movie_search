@@ -336,8 +336,9 @@ def analyze_top5_with_llm(top5_symbols: list, df_result: pd.DataFrame) -> list:
     """
     import os
 
-    # 读取 .env 文件
-    env_path = '/Users/wangqingxiang/source/movie_search/.env'
+    # 读取 .env 文件 (相对于脚本位置)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    env_path = os.path.join(script_dir, '.env')
     env_vars = {}
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
