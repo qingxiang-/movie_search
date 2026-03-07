@@ -20,13 +20,18 @@ if [ -f .env ]; then
   set +a
 fi
 
+# Also export to the Python script via file
+export PYTHON_ENV_FILE="$(pwd)/.env"
+
 # Configure Proxy
 export HTTP_PROXY="http://127.0.0.1:7890"
 export HTTPS_PROXY="http://127.0.0.1:7890"
 
 # Run the python script
-# Using /usr/bin/python3 for consistency with stock search script on remote
-/usr/bin/python3 paper_search.py >> "$LOG_FILE" 2>&1
+# Using conda environment 'search'
+source ~/opt/anaconda3/etc/profile.d/conda.sh
+conda activate search
+python paper_search.py >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?
 

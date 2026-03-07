@@ -22,11 +22,15 @@ from prompts.paper_prompts import (
     get_decision_making_prompt,
     get_summarization_prompt,
     get_topic_generation_prompt,
-    get_topic_refinement_prompt
+    get_topic_refinement_prompt,
+    get_keyword_generation_prompt,
+    get_keyword_refinement_prompt,
+    get_keyword_discovery_prompt
 )
 from utils.candidate_pool import CandidatePool
 from utils.deduplication import DeduplicationManager
 from utils.email_sender import EmailSender
+from utils.paper_keyword_config import PaperKeywordConfig, KeywordRotation
 
 
 class PaperSearchAgent(BaseBrowserAgent):
@@ -86,6 +90,20 @@ class PaperSearchAgent(BaseBrowserAgent):
         self.query_history = []
         self.topic = ""
         self.proxy = proxy
+
+        # 关键词配置
+        self.keyword_config = PaperKeywordConfig()
+        self.keyword_rotation = None
+        self.current_keywords = []
+        self.llm_generated_keywords = []
+
+    def initialize_keyword_rotation(self):
+        """初始化关键词轮换"""
+        # 使用关键词池（种子词 + 发现的词）
+        self.current_keywords = self.keyword_config.get_keyword_pool()
+
+        keywords_per_day = self.keyword_config.get_keywords_per_day()
+        self.keyword_rotation = KeywordRotation(self.current_keywords, keywords_per_day)
     
     def get_date_range(self) -> tuple:
         """获取日期范围"""
@@ -260,7 +278,173 @@ class PaperSearchAgent(BaseBrowserAgent):
                 "innovations": [],
                 "applications": []
             }
-    
+
+    async def generate_keywords_with_llm(self, recent_papers: list = None) -> List[str]:
+        """
+        使用 LLM 生成搜索关键词
+
+        Args:
+            recent_papers: 近期已发送的论文列表（用于避免重复）
+
+        Returns:
+            生成的关键词列表
+        """
+        print("\n🤖 正在使用 LLM 生成搜索关键词...")
+
+        # 获取历史关键词（处理可能的 dict 格式）
+        history_keywords = []
+        for kw in self.current_keywords:
+            if isinstance(kw, dict):
+                # 如果是 dict 格式，提取 keywords 字段
+                history_keywords.extend(kw.get('keywords', []))
+            elif isinstance(kw, str):
+                history_keywords.append(kw)
+
+        # 构建上下文
+        context = {
+            "user_interests": self.keyword_config.get_user_interests(),
+            "num_keywords": self.keyword_config.get_num_keywords(),
+            "keywords_per_topic": self.keyword_config.get_keywords_per_topic(),
+            "history_keywords": history_keywords,
+            "recent_papers": recent_papers or []
+        }
+
+        prompt = get_keyword_generation_prompt(context)
+
+        try:
+            response = await self.call_llm(prompt)
+
+            # 解析 JSON 响应
+            import json
+            try:
+                result = json.loads(response)
+                keywords = []
+
+                for item in result.get("keywords", []):
+                    # 每个主题的关键词
+                    topic_keywords = item.get("keywords", [])
+                    keywords.extend(topic_keywords)
+
+                print(f"✅ LLM 生成了 {len(keywords)} 个关键词")
+
+                # 保存到配置
+                self.keyword_config.update_keywords_from_llm(keywords)
+                self.llm_generated_keywords = keywords
+                self.current_keywords = keywords
+
+                return keywords
+
+            except json.JSONDecodeError as e:
+                print(f"⚠️  关键词解析失败: {e}")
+                # 降级使用默认关键词
+                return self.keyword_config.get_keywords()
+
+        except Exception as e:
+            print(f"⚠️  LLM 关键词生成失败: {e}")
+            return self.keyword_config.get_keywords()
+
+    def _flatten_keywords(self, keywords: List) -> List[str]:
+        """
+        将关键词列表展平为字符串列表
+
+        Args:
+            keywords: 可能包含 dict 或 str 的列表
+
+        Returns:
+            展平后的字符串列表
+        """
+        result = []
+        for kw in keywords:
+            if isinstance(kw, dict):
+                result.extend(kw.get('keywords', []))
+            elif isinstance(kw, str):
+                result.append(kw)
+        return result
+
+    def get_today_keywords(self) -> List[str]:
+        """
+        获取今天应该使用的关键词
+
+        Returns:
+            关键词列表
+        """
+        if not self.keyword_rotation:
+            self.initialize_keyword_rotation()
+
+        keywords = self.keyword_rotation.get_keywords_for_today() if self.keyword_config.is_rotation_enabled() else self.current_keywords
+        return self._flatten_keywords(keywords)
+
+    def get_all_keywords(self) -> List[str]:
+        """
+        获取所有关键词（用于完整搜索）
+
+        Returns:
+            关键词列表
+        """
+        if not self.current_keywords:
+            self.initialize_keyword_rotation()
+
+        return self._flatten_keywords(self.current_keywords)
+
+    async def discover_keywords_from_results(self, current_keyword: str, papers: List[Dict]) -> List[str]:
+        """
+        从搜索结果中发现新关键词
+
+        Args:
+            current_keyword: 当前搜索的关键词
+            papers: 搜索到的论文列表
+
+        Returns:
+            发现的关键词列表
+        """
+        if not papers:
+            return []
+
+        print(f"\n🔍 正在从 '{current_keyword}' 搜索结果中发现新关键词...")
+
+        # 获取已有的关键词池
+        existing_keywords = self.keyword_config.get_keyword_pool()
+
+        # 构建上下文
+        context = {
+            "current_keyword": current_keyword,
+            "papers": papers,
+            "existing_keywords": existing_keywords
+        }
+
+        prompt = get_keyword_discovery_prompt(context)
+
+        try:
+            response = await self.call_llm(prompt)
+
+            # 解析 JSON 响应
+            import json
+            try:
+                result = json.loads(response)
+                discovered = result.get("discovered_keywords", [])
+
+                if discovered:
+                    print(f"✅ 从 '{current_keyword}' 发现了 {len(discovered)} 个新关键词")
+                    # 添加到配置池
+                    self.keyword_config.add_discovered_keywords(discovered)
+                    # 更新当前关键词池
+                    self.current_keywords = self.keyword_config.get_keyword_pool()
+                    # 重新初始化轮换
+                    self.keyword_rotation = KeywordRotation(
+                        self.current_keywords,
+                        self.keyword_config.get_keywords_per_day()
+                    )
+
+                return discovered
+
+            except json.JSONDecodeError as e:
+                print(f"⚠️  关键词发现解析失败: {e}")
+                return []
+
+        except Exception as e:
+            print(f"⚠️  关键词发现失败: {e}")
+            return []
+
     def clean_html(self, html: str, source: str = "Google Scholar") -> str:
         """
         清理 HTML，只保留主要内容，去掉边框、banner、广告等
