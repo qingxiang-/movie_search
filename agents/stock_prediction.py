@@ -354,7 +354,7 @@ def format_prediction_result(result: Dict) -> str:
     
     pred = result['prediction']
     
-    return f"""
+    result_str = f"""
 {result['symbol']} 分析
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💰 当前价格: ${result['current_price']}
@@ -377,7 +377,7 @@ def format_prediction_result(result: Dict) -> str:
     # 添加各模型细节
     details = pred.get('method_details', {})
     for method, info in details.items():
-        emoji = "📉" if info.get('return', 0) > 0 else "📉"
+        emoji = "📈" if info.get('return', 0) > 0 else "📉"
         result_str += f"   {emoji} {method}: {info.get('return', 'N/A'):+.1f}% (置信: {info.get('confidence')})\n"
     
     # 添加技术指标
