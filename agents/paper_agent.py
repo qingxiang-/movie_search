@@ -31,6 +31,7 @@ from utils.candidate_pool import CandidatePool
 from utils.deduplication import DeduplicationManager
 from utils.email_sender import EmailSender
 from utils.paper_keyword_config import PaperKeywordConfig, KeywordRotation
+from agents.paper_agent_keyword_filter import filter_keywords
 
 
 class PaperSearchAgent(BaseBrowserAgent):
@@ -104,7 +105,27 @@ class PaperSearchAgent(BaseBrowserAgent):
 
         keywords_per_day = self.keyword_config.get_keywords_per_day()
         self.keyword_rotation = KeywordRotation(self.current_keywords, keywords_per_day)
-    
+
+    async def call_llm(self, prompt: str, temperature: float = 0.7) -> str:
+        """
+        调用 LLM 的便捷方法
+
+        Args:
+            prompt: 提示词
+            temperature: 温度参数
+
+        Returns:
+            LLM 响应内容
+
+        Raises:
+            Exception: LLM 调用失败时抛出异常
+        """
+        messages = [{"role": "user", "content": prompt}]
+        result = await self.llm_client.call(messages, temperature=temperature)
+        if result["success"]:
+            return result["content"]
+        raise Exception(f"LLM call failed: {result.get('error', 'Unknown error')}")
+
     def get_date_range(self) -> tuple:
         """获取日期范围"""
         end_date = datetime.now()
@@ -238,23 +259,31 @@ class PaperSearchAgent(BaseBrowserAgent):
     async def summarize_paper(self, paper: Dict[str, Any]) -> Dict[str, Any]:
         """
         使用 LLM 总结论文
-        
+
         Args:
             paper: 论文信息
-            
+
         Returns:
             总结信息字典
         """
         prompt = get_summarization_prompt(paper)
-        
+
         messages = [
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请生成该论文的总结"}
         ]
-        
-        result = await self.llm_client.call(messages, temperature=0.5)
-        
-        if result["success"]:
+
+        # 重试机制
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            result = await self.llm_client.call(messages, temperature=0.5, max_tokens=2500)
+
+            if not result["success"]:
+                if attempt < max_retries:
+                    await asyncio.sleep(1)
+                    continue
+                return self._get_fallback_summary(paper)
+
             content = result["content"]
             try:
                 # 提取 JSON
@@ -262,22 +291,69 @@ class PaperSearchAgent(BaseBrowserAgent):
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
                     content = content.split("```")[1].split("```")[0].strip()
-                
-                return json.loads(content)
+
+                summary_data = json.loads(content)
+
+                # 验证必要字段
+                if not summary_data.get("summary"):
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.5)
+                        continue
+                    return self._get_fallback_summary(paper, content)
+
+                return summary_data
+
             except json.JSONDecodeError:
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5)
+                    continue
+                return self._get_fallback_summary(paper, content)
+
+        return self._get_fallback_summary(paper)
+
+    def _get_fallback_summary(self, paper: Dict[str, Any], raw_content: str = None) -> Dict[str, Any]:
+        """
+        生成降级总结（当 LLM 失败时使用）
+
+        Args:
+            paper: 论文信息
+            raw_content: LLM 原始响应内容
+
+        Returns:
+            降级总结字典
+        """
+        abstract = paper.get('abstract', '')
+        title = paper.get('title', 'Unknown')
+
+        # 如果有原始内容，尝试提取有用信息
+        if raw_content and len(raw_content) > 50:
+            # 尝试从非 JSON 响应中提取总结
+            clean_content = re.sub(r'```.*?```', '', raw_content, flags=re.DOTALL)
+            clean_content = clean_content.strip()
+            if len(clean_content) > 30:
                 return {
-                    "summary": content[:200],
+                    "summary": clean_content[:300],
                     "key_methods": [],
                     "innovations": [],
                     "applications": []
                 }
-        else:
+
+        # 完全降级：使用摘要作为总结
+        if abstract:
             return {
-                "summary": "总结生成失败",
+                "summary": f"[摘要] {abstract[:300]}{'...' if len(abstract) > 300 else ''}",
                 "key_methods": [],
                 "innovations": [],
                 "applications": []
             }
+
+        # 最低降级
+        return {
+            "summary": f"论文标题：{title}",
+            "key_methods": [],
+            "innovations": [],
+            "applications": []
+        }
 
     async def generate_keywords_with_llm(self, recent_papers: list = None) -> List[str]:
         """
@@ -422,6 +498,9 @@ class PaperSearchAgent(BaseBrowserAgent):
             try:
                 result = json.loads(response)
                 discovered = result.get("discovered_keywords", [])
+
+                # P1 优化：关键词质量过滤
+                discovered = filter_keywords(discovered)
 
                 if discovered:
                     print(f"✅ 从 '{current_keyword}' 发现了 {len(discovered)} 个新关键词")
@@ -649,7 +728,7 @@ class PaperSearchAgent(BaseBrowserAgent):
     def _extract_from_arxiv(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """从 arXiv 提取论文信息"""
         papers = []
-        
+
         # 尝试多个可能的选择器
         results = soup.select('.arxiv-result')
         if not results:
@@ -658,38 +737,73 @@ class PaperSearchAgent(BaseBrowserAgent):
             results = soup.select('ol.breathe-horizontal li')
         if not results:
             results = soup.select('li[class*="arxiv"]')
-        
+
         print(f"   🐛 arXiv 选择器找到 {len(results)} 个结果元素")
-        
+
         for result in results[:10]:
             try:
                 title_elem = result.select_one('.title')
                 title = title_elem.get_text(strip=True) if title_elem else ""
-                
+
                 authors_elem = result.select_one('.authors')
                 authors_text = authors_elem.get_text(strip=True) if authors_elem else ""
                 authors = [a.strip() for a in authors_text.replace('Authors:', '').split(',')[:5]]
-                
+
                 # 提取提交日期（arXiv 通常显示 "Submitted 4 Jan 2024"）
                 published_date = ''
                 date_elem = result.select_one('.is-size-7')
                 if date_elem:
                     date_text = date_elem.get_text(strip=True)
-                    year_match = re.search(r'\b(20\d{2})\b', date_text)
-                    if year_match:
-                        published_date = year_match.group(1)
-                        # 尝试提取完整日期
-                        full_date_match = re.search(r'(\d{1,2}\s+\w+\s+20\d{2})', date_text)
-                        if full_date_match:
-                            published_date = full_date_match.group(1)
-                
+                    # 尝试提取完整日期 "Submitted 4 Jan 2026" 或 "Submitted 10 February 2026"
+                    full_date_match = re.search(r'(\d{1,2})\s+(\w+)\s+(20\d{2})', date_text)
+                    if full_date_match:
+                        day = int(full_date_match.group(1))
+                        month_str = full_date_match.group(2)
+                        year = int(full_date_match.group(3))
+                        # 月份英文转数字
+                        month_map = {
+                            'jan': 1, 'january': 1,
+                            'feb': 2, 'february': 2,
+                            'mar': 3, 'march': 3,
+                            'apr': 4, 'april': 4,
+                            'may': 5,
+                            'jun': 6, 'june': 6,
+                            'jul': 7, 'july': 7,
+                            'aug': 8, 'august': 8,
+                            'sep': 9, 'september': 9,
+                            'oct': 10, 'october': 10,
+                            'nov': 11, 'november': 11,
+                            'dec': 12, 'december': 12
+                        }
+                        month = month_map.get(month_str.lower(), 1)
+                        published_date = f"{year}-{month:02d}-{day:02d}"
+                    else:
+                        # 只找到年份
+                        year_match = re.search(r'\b(20\d{2})\b', date_text)
+                        if year_match:
+                            published_date = f"{year_match.group(1)}-01-01"
+
+                # 如果仍未找到日期，尝试从 arXiv ID 推断
+                if not published_date:
+                    link_elem = result.select_one('a[href*="/abs/"]')
+                    if link_elem:
+                        href = link_elem.get('href', '')
+                        # arXiv ID 格式：arXiv:2601.12345 (26=2026 年，01=1 月)
+                        arxiv_id_match = re.search(r'arxiv:(\d{2})(\d{2})\.', href, re.IGNORECASE)
+                        if arxiv_id_match:
+                            year = int(arxiv_id_match.group(1))
+                            month = int(arxiv_id_match.group(2))
+                            if 20 <= year <= 99:
+                                full_year = 2000 + year
+                                published_date = f"{full_year}-{month:02d}-01"
+
                 abstract_elem = result.select_one('.abstract-full')
                 abstract = abstract_elem.get_text(strip=True) if abstract_elem else ""
-                
+
                 link_elem = result.select_one('a[href*="/abs/"]')
                 url = f"https://arxiv.org{link_elem.get('href', '')}" if link_elem else ""
                 pdf_url = url.replace('/abs/', '/pdf/') + '.pdf' if url else ""
-                
+
                 if title:
                     papers.append({
                         'title': title,
@@ -706,7 +820,7 @@ class PaperSearchAgent(BaseBrowserAgent):
                     })
             except Exception as e:
                 continue
-        
+
         return papers
     
     def _extract_from_semantic_scholar(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
