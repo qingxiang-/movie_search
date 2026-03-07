@@ -37,22 +37,27 @@ def filter_keywords(keywords: List[str]) -> List[str]:
         kw_clean = kw.strip().lower()
         kw_words = kw_clean.split()
 
-        # 规则 1: 长度检查 (2-6 个单词)
+        # 规则 1: 检查是否为允许的中文术语（直接放行）
+        has_chinese = bool(re.search(r'[\u4e00-\u9fff]', kw))
+        if has_chinese and kw in ALLOWED_CN_TERMS:
+            filtered.append(kw)
+            continue
+
+        # 规则 2: 英文关键词长度检查 (2-6 个单词)
         if len(kw_words) < 2 or len(kw_words) > 6:
             continue
 
-        # 规则 2: 检查是否包含中文
-        has_chinese = bool(re.search(r'[\u4e00-\u9fff]', kw))
+        # 规则 3: 检查是否包含中文（不在允许列表中）
         if has_chinese:
             # 只允许特定中文术语
             if kw not in ALLOWED_CN_TERMS:
                 continue
 
-        # 规则 3: 排除过于宽泛的词
+        # 规则 4: 排除过于宽泛的词
         if kw_clean in TOO_BROAD_TERMS:
             continue
 
-        # 规则 4: 检查是否包含无意义的词
+        # 规则 5: 检查是否包含无意义的词
         meaningless_words = {"study", "analysis", "based", "approach", "method", "new", "novel"}
         if all(w in meaningless_words for w in kw_words):
             continue
