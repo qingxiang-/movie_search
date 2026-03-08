@@ -58,181 +58,64 @@ async def main():
     ]
     
     # 创建股票分析 Agent
-    agent = StockAnalysisAgent(
-        max_iterations=20,
-        min_stocks=3,
-        max_stocks=len(watchlist), # 调整最大股票数为关注列表长度
-        max_retries=3,
-        proxy=proxy
-    )
+    agent = StockAnalysisAgent()
     
     try:
-        # 执行搜索和分析（使用固定关注列表）
-        result = await agent.search_stocks(
-            fixed_symbols=watchlist
-        )
-        
-        all_stocks = result.get('all_stocks', [])
-        detailed_analysis = result.get('detailed_analysis', [])
-        analysis = result.get('analysis', {})
-        
+        # 执行分析（使用固定关注列表）
+        results = await agent.analyze_stocks(symbols=watchlist)
+
+        if not results:
+            print("\n❌ 分析失败")
+            return
+
         print(f"{'='*70}")
         print(f"📊 分析结果")
         print("="*70)
-        print(f"\n初步筛选: {len(all_stocks)} 只股票")
-        print(f"深度调研: {len(detailed_analysis)} 只股票")
-        
-        if not analysis.get('top_stocks'):
-            print("\n❌ 未能生成投资推荐")
-            return
-        
-        # 显示市场概览
-        market_overview = analysis.get('market_overview', 'N/A')
-        print(f"\n📈 市场概览:")
-        print(f"   {market_overview}")
-        
-        # 显示推荐股票
-        top_stocks = analysis.get('top_stocks', [])
-        print(f"\n🏆 分析完成，共 {len(top_stocks)} 只股票 (按评分排序):\n")
-        
-        for stock in top_stocks:
-            rank = stock.get('rank', 0)
-            symbol = stock.get('symbol', 'N/A')
-            company = stock.get('company_name', 'N/A')
-            
-            # 从新的嵌套结构中提取数据
-            summary = stock.get('investment_summary', {})
-            fundamental = stock.get('fundamental_analysis', {})
-            technical = stock.get('technical_analysis', {})
-            
-            recommendation = summary.get('recommendation', 'N/A')
-            score = summary.get('overall_score', 0)
-            time_horizon = summary.get('time_horizon', 'N/A')
-            current_price = stock.get('current_price', 'N/A')
-            target_price = stock.get('target_price', 'N/A')
+        print(f"\n完成分析：{len(results)} 只股票")
 
-            print(f"{'─'*70}")
-            print(f"🥇 No.{rank}: {symbol} - {company}")
-            print(f"   现价: {current_price} | 目标价: {target_price}")
-            print(f"   推荐: {recommendation} | 评分: {score}/10 | 周期: {time_horizon}")
-            
-            # 选股理由
-            if stock.get('selection_reason'):
-                print(f"\n   🎯 选股理由:")
-                print(f"      {stock.get('selection_reason')}")
+        # 生成 HTML 报告
+        print(f"\n{'='*70}")
+        print("📊 生成报告...")
+        html = agent.format_result_html(results)
 
-            # 基本面分析
-            print(f"\n   ** Fundamental Analysis:**")
-            if fundamental.get('background'):
-                print(f"   📋 **公司背景:** {fundamental.get('background')}")
-            if fundamental.get('financial_health'):
-                print(f"   💵 **财务状况:** {fundamental.get('financial_health')}")
-            if fundamental.get('catalysts'):
-                print(f"   🚀 **催化剂:** {', '.join(fundamental.get('catalysts', []))}")
-            if fundamental.get('risks'):
-                print(f"   ⚠️  **主要风险:** {', '.join(fundamental.get('risks', []))}")
-
-            # 技术面分析
-            print(f"\n   ** Technical Analysis:**")
-            if technical.get('trend'):
-                print(f"   📈 **当前趋势:** {technical.get('trend')}")
-            if technical.get('support_levels'):
-                print(f"   📉 **支撑位:** {', '.join(technical.get('support_levels', []))}")
-            if technical.get('resistance_levels'):
-                print(f"   📈 **阻力位:** {', '.join(technical.get('resistance_levels', []))}")
-            if technical.get('volume_analysis'):
-                print(f"   📊 **量价关系:** {technical.get('volume_analysis')}")
-
-            # 综合投资建议
-            if summary.get('conclusion'):
-                print(f"\n   📝 **综合投资建议:**")
-                print(f"      {summary.get('conclusion')}")
-        
-        print(f"\n{'─'*70}")
-        
-        # 投资策略
-        strategy = analysis.get('investment_strategy', 'N/A')
-        print(f"\n💡 投资策略:")
-        print(f"   {strategy}")
-        
-        # 风险警告
-        risk_warning = analysis.get('risk_warning', 'N/A')
-        print(f"\n⚠️  风险提示:")
-        print(f"   {risk_warning}")
-        
-        print("\n" + "="*70 + "\n")
-        
-        # 保存结果到文件
-        os.makedirs('data', exist_ok=True)
-        
         from datetime import datetime
         date_str = datetime.now().strftime("%Y-%m-%d")
-        result_file = f"data/stock_analysis_{date_str}.json"
-        
-        import json
-        with open(result_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                'search_time': result.get('search_time'),
-                'all_stocks': all_stocks,
-                'analysis': analysis
-            }, f, ensure_ascii=False, indent=2)
-        
-        print(f"💾 分析结果已保存到: {result_file}")
-        
+        html_file = f"data/stock_analysis_enhanced_{date_str}.html"
+
+        os.makedirs('data', exist_ok=True)
+        with open(html_file, 'w', encoding='utf-8') as f:
+            f.write(html)
+        print(f"✅ HTML 已保存：{html_file}")
+
         # 发送邮件
-        print("\n📧 正在发送邮件...")
-        
-        # 准备邮件数据（包含所有深度分析信息）
-        email_stocks = []
-        for stock in top_stocks:
-            summary = stock.get('investment_summary', {})
-            fundamental = stock.get('fundamental_analysis', {})
-            
-            email_stock = {
-                'rank': stock.get('rank', 0),
-                'symbol': stock.get('symbol', 'N/A'),
-                'company_name': stock.get('company_name', 'N/A'),
-                'current_price': stock.get('current_price', 'N/A'),
-                'target_price': stock.get('target_price', 'N/A'),
-                'recommendation': summary.get('recommendation', 'N/A'),
-                'investment_score': summary.get('overall_score', 0),
-                'background': fundamental.get('background', ''),
-                'catalysts': fundamental.get('catalysts', []),
-                'risks': fundamental.get('risks', []),
-                'selection_reason': stock.get('selection_reason', ''),
-                'detailed_analysis': summary.get('conclusion', ''),
-                'time_horizon': summary.get('time_horizon', 'N/A')
-            }
-            email_stocks.append(email_stock)
-        
-        email_topic = "美股投资推荐"
-        date_range_str = f"{date_str} 盘后分析"
-        
-        # 添加市场概览和策略到邮件
-        email_data = {
-            'stocks': email_stocks,
-            'market_overview': market_overview,
-            'investment_strategy': strategy,
-            'risk_warning': risk_warning
-        }
-        
-        success = agent.email_sender.send_stock_email(
-            email_data,
-            email_topic,
-            date_range_str
-        )
-        
-        if success:
-            print("✅ 邮件发送成功！")
-        else:
-            print("❌ 邮件发送失败")
-        
-        print("\n" + "="*70)
-        print("🎉 分析完成!")
+        print(f"\n{'='*70}")
+        print("📧 发送邮件...")
+        subject = f"美股多因子分析 {date_str}"
+        agent.send_email(html, subject)
+
+        # 汇总
+        print(f"\n{'='*70}")
+        print("📊 因子评分汇总")
         print("="*70)
-        
-    finally:
-        await agent.close()
+
+        for r in results:
+            if 'stock_data' in r:
+                data = r.get('stock_data', {})
+                score = data.get('composite_score', 0)
+                pred = r.get('prediction', {})
+                rec = pred.get('recommendation', 'N/A')
+                pred_ret = pred.get('predicted_return', 'N/A')
+                print(f"   {r['symbol']:6s}: ${data.get('current_price', 'N/A'):>7} | 综合:{score:+2d} | 预测:{pred_ret} | {rec}")
+            else:
+                print(f"   {r['symbol']:6s}: ❌ 分析失败")
+
+        print(f"\n{'='*70}\n")
+        print("🎉 分析完成!")
+
+    except Exception as e:
+        print(f"\n❌ 分析过程出错：{e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
