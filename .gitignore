@@ -68,3 +68,4 @@ update_prompt.py
 # Debug images
 *.png
 !assets/**/*.png
+.env
