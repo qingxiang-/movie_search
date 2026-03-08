@@ -295,7 +295,11 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
 
 def calculate_factors(df: pd.DataFrame) -> dict:
     """计算因子 - 使用并行计算加速"""
-    from alpha158 import Alpha158
+    # Try lite version first (no pandas_ta dependency), fallback to full version
+    try:
+        from alpha158_lite import Alpha158
+    except ImportError:
+        from alpha158 import Alpha158
 
     try:
         alpha = Alpha158(df)
