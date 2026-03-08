@@ -571,17 +571,24 @@ def _save_results(df_result: pd.DataFrame, top20: list) -> tuple:
 def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
                         alpha_factors: Dict = None) -> str:
     """
-    使用 LLM 结合 Alpha 因子分析股票新闻
-    注意：这里使用 LLM 的内部知识来分析，因为无法获取实时新闻
+    使用 Brave Search 获取真实新闻，再结合 LLM 和 Alpha 因子进行分析
     """
     try:
-        # 如果没有传入 api_key，尝试从环境变量加载
-        if not api_key:
-            from dotenv import load_dotenv
-            load_dotenv()
-            api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        # 加载环境变量
+        from dotenv import load_dotenv
+        load_dotenv()
 
-        # 构建因子分析信息
+        # ============ 1. 使用 Brave Search 获取真实新闻 ============
+        brave_api_key = os.getenv("BRAVE_API_KEY", "")
+        news_content = ""
+
+        if brave_api_key:
+            try:
+                news_content = _fetch_brave_news(ticker, brave_api_key)
+            except Exception as e:
+                logger.warning(f"Brave 新闻获取失败：{e}")
+
+        # ============ 2. 构建因子分析信息 ============
         factor_info = ""
         if alpha_factors:
             factor_lines = []
@@ -591,23 +598,71 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
             if factor_lines:
                 factor_info = "\n\nAlpha 因子数据:\n" + "\n".join(factor_lines[:15])  # 限制最多 15 个因子
 
-        # 构建分析 prompt - 让 LLM 基于因子数据和内部知识进行分析
-        prompt = f"""作为资深量化分析师，请对 {ticker} 股票进行深度分析。
+        # ============ 3. 构建分析 Prompt ============
+        if news_content:
+            prompt = f"""作为资深量化分析师，请对 {ticker} 股票进行深度分析。
 
+## 最新新闻
+
+{news_content}
+
+## Alpha 因子数据
 {factor_info}
 
-请结合以上因子数据和你的专业知识，分析：
-1. 从因子数据看，该股票的技术面特征（动量、波动率、趋势等）
-2. 基于你对 {ticker} 的了解，总结其基本面和近期动态
-3. 投资建议和风险提示
+请结合以上新闻和因子数据进行深度分析：
+
+1. **新闻解读**（30%）
+   - 从新闻中提取关键信息（财报、产品、并购、监管等）
+   - 评估新闻对股价的潜在影响
+
+2. **因子解读**（30%）
+   - 从因子数据看，该股票的技术面特征（动量、波动率、趋势等）
+   - 新闻与因子信号是否一致
+
+3. **基本面分析**（20%）
+   - 基于估值因子的合理性分析
+   - 行业对比和竞争地位
+
+4. **投资建议**（20%）
+   - 明确的操作建议（买入/持有/卖出）
+   - 目标价位和止损位
+   - 关键催化剂和风险因素
+
+要求：
+- 分析要具体，避免套话
+- 基于真实新闻和因子数据，不要编造
+- 结论要有可操作性
+
+限制在 500 字以内。"""
+        else:
+            # 没有新闻时，仅基于因子分析
+            prompt = f"""作为资深量化分析师，请对 {ticker} 股票进行深度分析。
+
+## Alpha 因子数据
+{factor_info}
+
+请结合以上因子数据和你的专业知识进行分析：
+
+1. **因子解读**（40%）
+   - 从因子数据看，该股票的技术面特征（动量、波动率、趋势等）
+
+2. **基本面分析**（30%）
+   - 基于你对 {ticker} 的了解，总结其基本面和近期动态
+   - 基于估值因子的合理性分析
+
+3. **投资建议**（30%）
+   - 明确的操作建议（买入/持有/卖出）
+   - 目标价位和止损位
+   - 关键催化剂和风险因素
 
 要求：
 - 分析要具体，避免套话
 - 基于因子数据给出量化角度的解读
-- 结论明确，有可操作性
+- 结论要有可操作性
 
 限制在 400 字以内。"""
 
+        # ============ 4. 调用 LLM 进行分析 ============
         if use_azure:
             # 使用 Azure OpenAI (新版 SDK)
             try:
@@ -639,13 +694,10 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
             )
             return response.choices[0].message.content
         else:
-            # 从环境变量加载配置
-            from dotenv import load_dotenv
-            load_dotenv()
-
+            # 使用 Qwen API
             base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
             api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
-            model = os.getenv("DASHSCOPE_MODEL", "qwen-max")
+            model = os.getenv("DASHSCOPE_MODEL", "qwen3.5-plus")
 
             if not api_key:
                 return "⚠️ 未设置 DASHSCOPE_API_KEY"
@@ -679,6 +731,54 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
                 return f"无法获取 {ticker} 分析（{error_msg}）"
     except Exception as e:
         return f"无法获取 {ticker} 分析（{str(e)}）"
+
+
+def _fetch_brave_news(ticker: str, api_key: str, count: int = 5) -> str:
+    """
+    使用 Brave Search API 获取股票新闻
+
+    Args:
+        ticker: 股票代码
+        api_key: Brave API Key
+        count: 获取新闻数量
+
+    Returns:
+        新闻内容字符串
+    """
+    url = "https://api.search.brave.com/res/v1/news/search"
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": api_key
+    }
+    params = {
+        "q": f"{ticker} stock news",
+        "count": count,
+        "freshness": "7d",  # 最近 7 天的新闻
+    }
+
+    response = requests.get(url, headers=headers, params=params, timeout=15)
+    response.raise_for_status()
+
+    result = response.json()
+    news_items = result.get("results", [])
+
+    if not news_items:
+        return f"未找到 {ticker} 的最近新闻"
+
+    news_content = []
+    for i, item in enumerate(news_items, 1):
+        title = item.get("title", "N/A")
+        description = item.get("description", "N/A")
+        url = item.get("url", "N/A")
+        date = item.get("age", "N/A")
+        source = item.get("language", "unknown").split("-")[0].upper() if item.get("language") else "N/A"
+
+        news_content.append(f"{i}. [{source}] {title}")
+        news_content.append(f"   {description}")
+        news_content.append(f"   来源：{url} | 时间：{date}")
+        news_content.append("")
+
+    return "\n".join(news_content)
 
 
 def _analyze_top_stocks_with_llm(top_stocks: list, df_result: pd.DataFrame, api_key: str) -> list:
