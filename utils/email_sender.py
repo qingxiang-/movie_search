@@ -587,3 +587,44 @@ class EmailSender:
         else:
             print(f"❌ 所有邮件发送失败")
             return False
+
+    def send_topic_digest(self, html_content: str, date_str: str = None) -> bool:
+        """
+        发送主题摘要邮件（用于新的主题报告格式）
+
+        Args:
+            html_content: HTML邮件内容（主题报告）
+            date_str: 日期字符串
+
+        Returns:
+            是否发送成功
+        """
+        if not date_str:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        subject = f"AI Research Digest ({date_str})"
+        return self.send_email_report(html_content, subject)
+
+    def save_html_report(self, html_content: str, topic: str = "report") -> str:
+        """
+        保存HTML报告到文件
+
+        Args:
+            html_content: HTML内容
+            topic: 主题名称（用于文件名）
+
+        Returns:
+            保存的文件路径
+        """
+        os.makedirs('data', exist_ok=True)
+        safe_topic = topic.replace(' ', '_').replace('/', '_').replace('\\', '_').replace(':', '_')
+        html_filename = f"data/topic_{safe_topic}_{datetime.now().strftime('%Y-%m-%d')}.html"
+
+        try:
+            with open(html_filename, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            print(f"💾 报告已保存到: {html_filename}")
+            return html_filename
+        except Exception as e:
+            print(f"⚠️  保存HTML文件失败: {e}")
+            return ""

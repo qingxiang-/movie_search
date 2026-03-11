@@ -2,6 +2,7 @@
 """
 学术论文搜索工具 - LLM 智能导航版
 使用 LLM 规划查询、评估论文、决策下一步操作
+支持主题聚类报告模式
 """
 
 import os
@@ -28,6 +29,9 @@ if 'HTTP_PROXY' not in os.environ:
     os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:7890'
 
 from agents.paper_agent import PaperSearchAgent
+
+# 主题报告模式开关（可通过环境变量控制）
+TOPIC_BASED_REPORT = os.getenv("TOPIC_BASED_REPORT", "true").lower() == "true"
 
 
 async def main():
@@ -256,28 +260,52 @@ async def main():
         
         # 1. 先保存搜索结果到文件（保存到 data 文件夹）
         os.makedirs('data', exist_ok=True)
-        
+
         start_date, end_date = agent.get_date_range()
         pool_file = f"data/paper_pool_8keywords_{end_date}.json"
-        
+
         # 将 top_papers 放回 pool 以便保存
         pool.papers = filtered_papers  # 保存所有去重后的论文
         pool.save_to_file(pool_file)
         print(f"\n💾 搜索结果已保存到: {pool_file}")
 
-        # 2. 自动发送邮件（只发送最有价值的前10篇）
-        email_topic = "AI/LLM 最新研究精选"
+        # 2. 发送报告
         date_range_str = f"{start_date} ~ {end_date}"
 
-        success = agent.email_sender.send_email(
-            top_papers,
-            email_topic,
-            date_range_str
-        )
+        if TOPIC_BASED_REPORT:
+            # 使用主题聚类报告模式
+            print("\n📊 使用主题聚类报告模式...")
+            from utils.topic_report_generator import TopicReportGenerator
+            from core.llm_client import LLMClient
 
-        if success:
-            # 更新已发送记录（只记录发送的10篇）
-            agent.dedup_manager.add_sent_papers(top_papers, email_topic)
+            llm_client = LLMClient()
+            report_generator = TopicReportGenerator(llm_client, agent.email_sender)
+
+            # 生成主题报告
+            report = await report_generator.generate_report(top_papers, end_date)
+
+            # 保存报告
+            report_generator.save_report(report)
+
+            # 发送邮件
+            success = await report_generator.send_report_email(report)
+
+            if success:
+                # 更新已发送记录
+                email_topic = "AI Research Digest"
+                agent.dedup_manager.add_sent_papers(top_papers, email_topic)
+        else:
+            # 使用传统论文列表报告模式
+            email_topic = "AI/LLM 最新研究精选"
+            success = agent.email_sender.send_email(
+                top_papers,
+                email_topic,
+                date_range_str
+            )
+
+            if success:
+                # 更新已发送记录（只记录发送的10篇）
+                agent.dedup_manager.add_sent_papers(top_papers, email_topic)
         
         print("\n" + "="*70)
         print("🎉 搜索完成!")
