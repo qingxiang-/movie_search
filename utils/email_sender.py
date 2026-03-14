@@ -59,9 +59,13 @@ class EmailSender:
                 # SMTP 配置
                 self.smtp_server = config.get('smtp_server', '')
                 self.smtp_port = config.get('smtp_port', 587)
-                self.smtp_password = config.get('smtp_password', '')
         except Exception as e:
             print(f"⚠️  读取邮件配置文件失败: {e}，使用默认配置")
+
+        # 从 .env 读取SMTP密码（优先级高于yaml配置）
+        env_smtp_password = os.getenv("SMTP_PASSWORD", "")
+        if env_smtp_password:
+            self.smtp_password = env_smtp_password
 
         # 初始化阿里云客户端（如果有配置）
         self.client = None
