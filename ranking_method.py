@@ -341,6 +341,15 @@ def calculate_factors(df: pd.DataFrame) -> dict:
         logger.debug(f"Factor calculation error: {e}")
         return {}
 
+def get_momentum(row, default=0):
+    """获取 6 月动量值，支持多种命名方式 (momentum_120d, momentum_6m, momentum_60d)"""
+    for col in ['momentum_120d', 'momentum_6m', 'momentum_60d', 'momentum_3m']:
+        if col in row.index:
+            val = row[col]
+            if pd.notna(val):
+                return val
+    return default
+
 def zscore_normalize(series: pd.Series) -> pd.Series:
     """Z-score 标准化"""
     mean = series.mean()
@@ -416,7 +425,7 @@ def send_email_report(df_result: pd.DataFrame, top20: list):
 
         for i, ticker in enumerate(top20):
             row = df_result.loc[ticker]
-            mom = row.get('momentum_6m', row.get('momentum_3m', 0))
+            mom = get_momentum(row)
             sharpe = row.get('sharpe_ratio_20d', 0)
             vol = row.get('volatility_20d', 0)
             html += f"""
@@ -537,7 +546,7 @@ def _print_top_stocks(df_result: pd.DataFrame, top_n: int = 20):
     top_n = min(top_n, len(df_result))
     for i, ticker in enumerate(df_result.head(top_n).index.tolist()):
         row = df_result.loc[ticker]
-        mom = row.get('momentum_6m', row.get('momentum_3m', 0))
+        mom = get_momentum(row)
         sharpe = row.get('sharpe_ratio_20d', 0)
         vol = row.get('volatility_20d', 0)
         logger.info(f"{i+1:<4} {ticker:<8} {row['score']:<10.3f} {mom:<10.1f}% {sharpe:<10.2f} {vol:<10.2f}")
@@ -720,19 +729,50 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
                 "temperature": 0.5
             }
 
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            # 使用代理（如果配置了环境变量）
+            proxies = None
+            http_proxy = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+            https_proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+            if https_proxy or http_proxy:
+                proxies = {"http": http_proxy, "https": https_proxy or http_proxy}
 
-            if response.status_code == 200:
-                result = response.json()
-                return result["choices"][0]["message"]["content"]
-            else:
-                error_msg = f"HTTP {response.status_code}"
+            # 重试逻辑：最多重试 3 次，指数退避
+            max_retries = 3
+            last_error = None
+            for attempt in range(max_retries):
                 try:
-                    error = response.json()
-                    error_msg += f": {error.get('error', {}).get('message', 'Unknown')}"
-                except:
-                    pass
-                return f"无法获取 {ticker} 分析（{error_msg}）"
+                    # 超时设置: 连接 30 秒，读取 120 秒
+                    response = requests.post(
+                        url,
+                        headers=headers,
+                        json=data,
+                        timeout=(30, 120),
+                        proxies=proxies
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        return result["choices"][0]["message"]["content"]
+                    else:
+                        error_msg = f"HTTP {response.status_code}"
+                        try:
+                            error = response.json()
+                            error_msg += f": {error.get('error', {}).get('message', 'Unknown')}"
+                        except:
+                            pass
+                        return f"无法获取 {ticker} 分析（{error_msg}）"
+                except requests.exceptions.Timeout as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # 1, 2, 4 秒
+                        logger.warning(f"   {ticker} API 超时，{wait_time}秒后重试 ({attempt+1}/{max_retries})")
+                        import time
+                        time.sleep(wait_time)
+                    continue
+                except Exception as e:
+                    return f"无法获取 {ticker} 分析（{str(e)}）"
+
+            return f"无法获取 {ticker} 分析（超时，重试 {max_retries} 次后失败）"
     except Exception as e:
         return f"无法获取 {ticker} 分析（{str(e)}）"
 
@@ -787,19 +827,14 @@ def _fetch_brave_news(ticker: str, api_key: str, count: int = 5) -> str:
 
 def _analyze_top_stocks_with_llm(top_stocks: list, df_result: pd.DataFrame, api_key: str) -> list:
     """Use LLM to analyze and summarize top stocks with alpha factors."""
-    # Try Azure OpenAI first, then Qwen API
-    azure_api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
-    use_azure = bool(azure_api_key and azure_api_key != "your_azure_api_key_here")
-
-    if use_azure:
-        logger.info(f"   使用 Azure OpenAI 获取分析")
-    else:
-        logger.info(f"   使用 Qwen API 获取分析")
+    # 强制使用 Qwen API
+    use_azure = False
+    logger.info(f"   使用 Qwen API 获取分析")
 
     results = []
     for ticker in top_stocks:
         row = df_result.loc[ticker]
-        mom = row.get('momentum_6m', row.get('momentum_3m', 0))
+        mom = get_momentum(row)
         sharpe = row.get('sharpe_ratio_20d', 0)
         vol = row.get('volatility_20d', 0)
         score = row.get('score', 0)
@@ -813,7 +848,7 @@ def _analyze_top_stocks_with_llm(top_stocks: list, df_result: pd.DataFrame, api_
         results.append({
             'ticker': ticker,
             'score': score,
-            'momentum_6m': mom,
+            'momentum_120d': mom,
             'sharpe': sharpe,
             'volatility': vol,
             'alpha_factors': alpha_factors,
@@ -863,7 +898,7 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
 
     for i, ticker in enumerate(top20):
         row = df_result.loc[ticker]
-        mom = row.get('momentum_6m', row.get('momentum_3m', 0))
+        mom = get_momentum(row)
         sharpe = row.get('sharpe_ratio_20d', 0)
         vol = row.get('volatility_20d', 0)
         html += f"""
@@ -896,7 +931,7 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
             <div class="metrics">
                 <div class="metric">
                     <div class="metric-label">6 月动量</div>
-                    <div class="metric-value">{stock['momentum_6m']:.1f}%</div>
+                    <div class="metric-value">{stock['momentum_120d']:.1f}%</div>
                 </div>
                 <div class="metric">
                     <div class="metric-label">夏普比率</div>

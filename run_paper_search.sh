@@ -28,9 +28,9 @@ export HTTP_PROXY="http://127.0.0.1:7890"
 export HTTPS_PROXY="http://127.0.0.1:7890"
 
 # Run the python script
-# Using conda environment 'search'
-source ~/opt/anaconda3/etc/profile.d/conda.sh
-conda activate search
+# Using miniconda3 base environment
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate base
 python paper_search.py >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?

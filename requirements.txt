@@ -4,8 +4,8 @@ playwright>=1.50.0
 # HTTP 客户端 - 用于直接调用 Qwen API
 httpx>=0.24.0
 
-# OpenAI SDK - 用于 Azure OpenAI (v0.28.1 for Python 3.6 compatibility)
-openai<1.0.0
+# OpenAI SDK - 新版 API (>=1.0.0)
+openai>=1.0.0
 
 # 环境变量管理
 python-dotenv>=0.19.0

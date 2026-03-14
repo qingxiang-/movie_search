@@ -16,7 +16,6 @@ from io import BytesIO
 
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from dotenv import load_dotenv
-import openai
 
 load_dotenv()
 
@@ -57,15 +56,23 @@ class DamaiSearcher:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.results = {}
-        
-        # 配置 Azure OpenAI
-        if AZURE_OPENAI_API_KEY:
-            openai.api_type = "azure"
-            openai.api_key = AZURE_OPENAI_API_KEY
-            openai.api_base = AZURE_OPENAI_ENDPOINT
-            openai.api_version = AZURE_OPENAI_API_VERSION
-        else:
+
+        # Azure OpenAI 客户端 (延迟初始化)
+        self._azure_client = None
+
+        if not AZURE_OPENAI_API_KEY:
             raise ValueError("Azure OpenAI API Key 未配置，请在 .env 文件中设置 AZURE_OPENAI_API_KEY")
+
+    def _get_azure_client(self):
+        """获取 Azure OpenAI 客户端 (延迟初始化)"""
+        if self._azure_client is None:
+            from openai import AzureOpenAI
+            self._azure_client = AzureOpenAI(
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+                azure_endpoint=AZURE_OPENAI_ENDPOINT.rstrip('/') if AZURE_OPENAI_ENDPOINT else ""
+            )
+        return self._azure_client
 
     async def call_gpt_vision(
         self, 
@@ -152,17 +159,19 @@ class DamaiSearcher:
         ]
 
         try:
+            # 使用新版 Azure OpenAI SDK
+            client = self._get_azure_client()
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: openai.ChatCompletion.create(
-                    engine=AZURE_OPENAI_DEPLOYMENT,
+                lambda: client.chat.completions.create(
+                    model=AZURE_OPENAI_DEPLOYMENT,
                     messages=messages,
                     temperature=0.3,
                     max_completion_tokens=1000
                 )
             )
-            
-            content = response.choices[0].message["content"]
+
+            content = response.choices[0].message.content
             
             # 打印完整的 GPT 响应用于调试
             print(f"\n{'='*60}")
