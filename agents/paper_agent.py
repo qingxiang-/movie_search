@@ -31,7 +31,7 @@ from utils.candidate_pool import CandidatePool
 from utils.deduplication import DeduplicationManager
 from utils.email_sender import EmailSender
 from utils.paper_keyword_config import PaperKeywordConfig, KeywordRotation
-from agents.paper_agent_keyword_filter import filter_keywords
+from agents.paper_agent_keyword_filter import filter_keywords, is_excluded_paper
 
 
 class PaperSearchAgent(BaseBrowserAgent):
@@ -890,6 +890,10 @@ class PaperSearchAgent(BaseBrowserAgent):
         try:
             if action_type == "add_to_pool":
                 paper = context.get("current_paper", {})
+                # 检查是否属于排除的应用领域
+                if is_excluded_paper(paper):
+                    print(f"⏭️  排除应用类论文: {paper.get('title', 'N/A')[:50]}...")
+                    return {"success": False, "error": "排除（应用类: 医疗/临床领域）"}
                 if self.candidate_pool.add_paper(paper):
                     print(f"✅ 已加入候选池: {paper.get('title', 'N/A')[:60]}...")
                     return {"success": True, "action_taken": "add_to_pool"}
@@ -1104,12 +1108,17 @@ class PaperSearchAgent(BaseBrowserAgent):
                         
                         # Allow "need_more_info" if score is high enough to ensure we collect papers
                         if (decision_type == "add_to_pool" or decision_type == "need_more_info") and score >= self.candidate_pool.min_quality_score:
+                            # 检查是否属于排除的应用领域（医疗、临床等）
+                            if is_excluded_paper(paper):
+                                print(f"   ⏭️  排除（应用类论文: 医疗/临床领域）")
+                                continue
+
                             paper['importance_score'] = score
                             paper['reason'] = decision.get('reason', '')
                             paper['strengths'] = decision.get('strengths', [])
                             paper['relevance'] = decision.get('relevance', '中')
                             paper['query_used'] = query_plan.get('query')
-                            
+
                             if self.candidate_pool.add_paper(paper):
                                 print(f"   ✅ 已加入候选池")
                                 relevant_count += 1

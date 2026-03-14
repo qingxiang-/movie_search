@@ -2,7 +2,17 @@
 关键词过滤模块 - P1 优化
 """
 import re
-from typing import List
+from typing import List, Dict
+
+
+# 排除的应用领域关键词 (医疗、临床等应用类)
+EXCLUSION_DOMAINS = {
+    "clinical", "medical", "healthcare", "hospital", "patient",
+    "diagnosis", "treatment", "disease", "drug", "medicine",
+    "biosignal", "ecg", "ehr", "icu", "wearable",
+    "sleep monitoring", "federated medical", "cancer", "tumor",
+    "surgery", "therapeutic", "clinical trial", "health monitoring"
+}
 
 
 def filter_keywords(keywords: List[str]) -> List[str]:
@@ -13,6 +23,7 @@ def filter_keywords(keywords: List[str]) -> List[str]:
     1. 只接受英文 (允许少数特定中文术语)
     2. 长度在 2-6 个单词之间
     3. 排除过于宽泛的词
+    4. 排除医疗/临床等应用领域
 
     Args:
         keywords: 待过滤的关键词列表
@@ -62,6 +73,34 @@ def filter_keywords(keywords: List[str]) -> List[str]:
         if all(w in meaningless_words for w in kw_words):
             continue
 
+        # 规则 6: 排除医疗/临床等应用领域关键词
+        if any(excl in kw_clean for excl in EXCLUSION_DOMAINS):
+            continue
+
         filtered.append(kw)
 
     return filtered
+
+
+def is_excluded_paper(paper: Dict) -> bool:
+    """
+    检查论文是否属于排除的应用领域
+
+    Args:
+        paper: 论文信息字典，包含 title, abstract 等
+
+    Returns:
+        True 如果应该排除，False 如果保留
+    """
+    title = paper.get("title", "").lower()
+    abstract = paper.get("abstract", "").lower()
+    text = f"{title} {abstract}"
+
+    # 检查是否包含排除领域关键词
+    exclusion_count = 0
+    for excl in EXCLUSION_DOMAINS:
+        if excl in text:
+            exclusion_count += 1
+
+    # 如果包含 2 个或以上排除关键词，则排除
+    return exclusion_count >= 2
