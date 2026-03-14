@@ -69,3 +69,4 @@ update_prompt.py
 *.png
 !assets/**/*.png
 .env
+email_config.yaml
