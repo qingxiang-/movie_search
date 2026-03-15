@@ -190,7 +190,7 @@ class TopicReportGenerator:
 
     def _generate_topic_html(self, topic_reports: List[Dict], date_str: str, intro: str) -> str:
         """
-        生成主题报告HTML
+        生成主题报告HTML (移动端优化)
 
         Args:
             topic_reports: 主题报告列表
@@ -204,160 +204,211 @@ class TopicReportGenerator:
         total_papers = sum(r.get('paper_count', 0) for r in topic_reports)
 
         html = f"""<!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="format-detection" content="telephone=no">
+    <title>AI Research Digest</title>
     <style>
+        * {{
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }}
+        html {{
+            font-size: 16px;
+        }}
         body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            padding: 20px;
-            max-width: 900px;
-            margin: 0 auto;
-            background: #fafafa;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.5;
+            color: #1a1a1a;
+            margin: 0;
+            padding: 0;
+            background: #f5f5f5;
+            -webkit-font-smoothing: antialiased;
         }}
         .container {{
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-width: 100%;
+            margin: 0 auto;
+            background: #fff;
         }}
-        h2 {{
-            color: #1a73e8;
-            border-bottom: 2px solid #1a73e8;
-            padding-bottom: 10px;
-            margin-top: 0;
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
         }}
-        .meta {{
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 20px;
+        .header h1 {{
+            margin: 0 0 8px 0;
+            font-size: 1.3rem;
+            font-weight: 600;
+        }}
+        .header .meta {{
+            font-size: 0.85rem;
+            opacity: 0.9;
         }}
         .intro {{
-            background: #e8f0fe;
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 25px;
-            border-left: 4px solid #1a73e8;
+            background: linear-gradient(135deg, #e8f4f8 0%, #e8f0fe 100%);
+            padding: 16px;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 0.95rem;
+            line-height: 1.6;
         }}
-        .topics-overview {{
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 25px;
-        }}
-        .topics-overview ul {{
-            margin: 10px 0 0 0;
-            padding-left: 20px;
-        }}
-        .topics-overview li {{
-            margin: 5px 0;
-        }}
-        .topic-section {{
-            margin: 30px 0;
-            padding: 20px;
-            background: #fff;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-        }}
-        .topic-header {{
-            color: #1a73e8;
-            margin-top: 0;
-            padding-bottom: 10px;
+        .topics-nav {{
+            background: #fafafa;
+            padding: 12px 16px;
             border-bottom: 1px solid #e0e0e0;
         }}
-        .topic-meta {{
+        .topics-nav-title {{
+            font-size: 0.85rem;
             color: #666;
-            font-size: 13px;
-            margin-bottom: 15px;
+            margin-bottom: 8px;
+        }}
+        .topics-nav-list {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }}
+        .topic-tag {{
+            background: #e8f0fe;
+            color: #1a73e8;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 0.8rem;
+            text-decoration: none;
+            display: inline-block;
+        }}
+        .topic-section {{
+            border-bottom: 8px solid #f0f0f0;
+        }}
+        .topic-header {{
+            background: linear-gradient(135deg, #1a73e8 0%, #4285f4 100%);
+            color: white;
+            padding: 16px;
+        }}
+        .topic-header h2 {{
+            margin: 0;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }}
+        .topic-header .count {{
+            font-size: 0.85rem;
+            opacity: 0.9;
+            margin-top: 4px;
         }}
         .topic-overview {{
-            background: #f8f9fa;
-            padding: 12px;
-            border-radius: 6px;
-            margin: 15px 0;
+            background: #fafafa;
+            padding: 16px;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 0.9rem;
+            line-height: 1.6;
         }}
         .key-insights {{
             background: #e8f5e9;
-            padding: 12px;
-            border-radius: 6px;
-            margin: 15px 0;
+            padding: 16px;
             border-left: 4px solid #34a853;
+            margin: 0;
         }}
-        .key-insights h4 {{
-            margin: 0 0 10px 0;
-            color: #34a853;
+        .key-insights h3 {{
+            margin: 0 0 12px 0;
+            font-size: 0.95rem;
+            color: #2e7d32;
         }}
         .key-insights ul {{
             margin: 0;
             padding-left: 20px;
         }}
+        .key-insights li {{
+            margin: 8px 0;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }}
         .paper-card {{
-            background: #fff;
-            border: 1px solid #e0e0e0;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 6px;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 16px;
+        }}
+        .paper-card:last-child {{
+            border-bottom: none;
         }}
         .paper-title {{
-            color: #202124;
-            font-size: 15px;
+            font-size: 1rem;
             font-weight: 600;
+            color: #202124;
             margin: 0 0 10px 0;
+            line-height: 1.4;
         }}
         .paper-meta {{
+            font-size: 0.75rem;
             color: #666;
-            font-size: 12px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
+        }}
+        .paper-meta span {{
+            display: inline-block;
+            margin-right: 12px;
         }}
         .paper-detail {{
+            background: #fafafa;
+            padding: 10px 12px;
+            border-radius: 8px;
             margin: 8px 0;
-            font-size: 14px;
+            font-size: 0.85rem;
         }}
         .paper-detail strong {{
-            color: #5f6368;
+            color: #333;
+            display: block;
+            margin-bottom: 4px;
         }}
         .paper-link {{
+            display: inline-block;
+            margin-top: 12px;
             color: #1a73e8;
             text-decoration: none;
-            font-size: 13px;
+            font-size: 0.9rem;
+            font-weight: 500;
         }}
-        .paper-link:hover {{
-            text-decoration: underline;
+        .paper-link:after {{
+            content: ' →';
         }}
         .footer {{
-            color: #999;
-            font-size: 12px;
             text-align: center;
-            margin-top: 40px;
-            padding-top: 20px;
-            border-top: 1px solid #e0e0e0;
+            padding: 20px 16px;
+            color: #999;
+            font-size: 0.8rem;
+            background: #fafafa;
+        }}
+        @media (min-width: 768px) {{
+            .container {{
+                max-width: 600px;
+                margin: 0 auto;
+                box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            }}
         }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>AI Research Digest</h2>
-
-        <div class="meta">
-            <strong>Date:</strong> {date_str} | <strong>Topics:</strong> {len(topic_reports)} | <strong>Papers:</strong> {total_papers}
+        <div class="header">
+            <h1>AI Research Digest</h1>
+            <div class="meta">{date_str} · {len(topic_reports)} Topics · {total_papers} Papers</div>
         </div>
 
         <div class="intro">
             {intro}
         </div>
 
-        <div class="topics-overview">
-            <strong>Topics in this digest:</strong>
-            <ul>
+        <div class="topics-nav">
+            <div class="topics-nav-title">Topics in this digest:</div>
+            <div class="topics-nav-list">
 """
 
-        # 添加主题概览
-        for report in topic_reports:
-            html += f"""                <li>{report.get('topic_name', 'Unknown')} ({report.get('paper_count', 0)} papers)</li>\n"""
+        # 添加主题导航
+        for i, report in enumerate(topic_reports, 1):
+            topic_name = report.get('topic_name', 'Unknown')[:30]
+            html += f'                <a href="#topic-{i}" class="topic-tag">{topic_name}</a>\n'
 
-        html += """            </ul>
+        html += """            </div>
         </div>
 
 """
@@ -370,22 +421,21 @@ class TopicReportGenerator:
             papers = report.get('papers', [])
             paper_analyses = report.get('paper_analyses', [])
 
-            html += f"""        <div class="topic-section">
-            <h3 class="topic-header">Topic {i}: {topic_name}</h3>
-
-            <div class="topic-meta">
-                {report.get('paper_count', 0)} papers in this topic
+            html += f"""        <div class="topic-section" id="topic-{i}">
+            <div class="topic-header">
+                <h2>Topic {i}: {topic_name}</h2>
+                <div class="count">{report.get('paper_count', 0)} papers</div>
             </div>
 
             <div class="topic-overview">
-                <strong>Overview:</strong> {overview}
+                {overview}
             </div>
 """
 
             # 关键洞察
             if key_insights:
                 html += """            <div class="key-insights">
-                <h4>Key Insights</h4>
+                <h3>💡 Key Insights</h3>
                 <ul>
 """
                 for insight in key_insights[:5]:
@@ -395,15 +445,11 @@ class TopicReportGenerator:
 """
 
             # 论文列表
-            html += """            <div class="papers-section">
-                <h4>Papers in this topic:</h4>
-"""
-
             for j, paper in enumerate(papers, 1):
                 analysis = paper_analyses[j-1] if j <= len(paper_analyses) else {}
                 title = paper.get('title', 'N/A')
-                authors = ', '.join(paper.get('authors', [])[:3])
-                if len(paper.get('authors', [])) > 3:
+                authors = ', '.join(paper.get('authors', [])[:2])
+                if len(paper.get('authors', [])) > 2:
                     authors += ' et al.'
                 score = paper.get('importance_score', 0)
                 url = paper.get('url', '#')
@@ -411,32 +457,38 @@ class TopicReportGenerator:
 
                 relevance = analysis.get('relevance', 'Related to this topic')
                 contribution = analysis.get('main_contribution', 'N/A')
-                experiments = analysis.get('key_experiments', 'N/A')
                 insight = analysis.get('key_insight', 'N/A')
 
-                html += f"""                <div class="paper-card">
-                    <p class="paper-title">{j}. {title}</p>
-                    <p class="paper-meta">
-                        <strong>Authors:</strong> {authors} |
-                        <strong>Score:</strong> {score:.1f}/10 |
-                        <strong>Published:</strong> {pub_date}
-                    </p>
-                    <p class="paper-detail"><strong>Why relevant:</strong> {relevance}</p>
-                    <p class="paper-detail"><strong>Main contribution:</strong> {contribution}</p>
-                    <p class="paper-detail"><strong>Key experiments:</strong> {experiments}</p>
-                    <p class="paper-detail"><strong>Key insight:</strong> {insight}</p>
-                    <a class="paper-link" href="{url}">View Paper</a>
+                html += f"""            <div class="paper-card">
+                <p class="paper-title">{j}. {title}</p>
+                <div class="paper-meta">
+                    <span>👤 {authors}</span>
+                    <span>⭐ {score:.1f}/10</span>
+                    <span>📅 {pub_date}</span>
                 </div>
+                <div class="paper-detail">
+                    <strong>Why relevant</strong>
+                    {relevance}
+                </div>
+                <div class="paper-detail">
+                    <strong>Main contribution</strong>
+                    {contribution}
+                </div>
+                <div class="paper-detail">
+                    <strong>Key insight</strong>
+                    {insight}
+                </div>
+                <a href="{url}" class="paper-link">View Paper</a>
+            </div>
 """
 
-            html += """            </div>
-        </div>
+            html += """        </div>
 
 """
 
         html += f"""        <div class="footer">
-            This automated report was generated on {timestamp}.<br>
-            Powered by AI Research Digest System.
+            Generated on {timestamp}<br>
+            AI Research Digest System
         </div>
     </div>
 </body>
