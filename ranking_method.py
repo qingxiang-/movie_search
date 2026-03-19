@@ -72,6 +72,87 @@ TECH_100 = [
     'TMUS', 'VZ', 'NOK', 'CSCO', 'ERIC', 'CMCSA',
     'UPST', 'SOFI', 'PYPL', 'AFRM',
 ]
+
+# 股票名称映射（中文优先）
+STOCK_NAMES = {
+    # 科技巨头
+    'AAPL': {'cn': '苹果', 'en': 'Apple'},
+    'MSFT': {'cn': '微软', 'en': 'Microsoft'},
+    'NVDA': {'cn': '英伟达', 'en': 'NVIDIA'},
+    'GOOGL': {'cn': '谷歌-A', 'en': 'Google-A'},
+    'GOOG': {'cn': '谷歌-C', 'en': 'Google-C'},
+    'AMZN': {'cn': '亚马逊', 'en': 'Amazon'},
+    'META': {'cn': 'Meta', 'en': 'Meta/Facebook'},
+    'TSLA': {'cn': '特斯拉', 'en': 'Tesla'},
+
+    # 半导体
+    'AVGO': {'cn': '博通', 'en': 'Broadcom'},
+    'AMD': {'cn': 'AMD', 'en': 'AMD'},
+    'QCOM': {'cn': '高通', 'en': 'Qualcomm'},
+    'ORCL': {'cn': '甲骨文', 'en': 'Oracle'},
+    'TSM': {'cn': '台积电', 'en': 'TSMC'},
+    'ASML': {'cn': '阿斯麦', 'en': 'ASML'},
+    'TXN': {'cn': '德州仪器', 'en': 'Texas Instruments'},
+    'AMAT': {'cn': '应用材料', 'en': 'Applied Materials'},
+    'MU': {'cn': '美光', 'en': 'Micron'},
+    'LRCX': {'cn': '拉姆研究', 'en': 'Lam Research'},
+    'KLAC': {'cn': '科磊', 'en': 'KLA'},
+    'MRVL': {'cn': '迈威尔', 'en': 'Marvell'},
+
+    # 软件/云
+    'ADBE': {'cn': 'Adobe', 'en': 'Adobe'},
+    'CRM': {'cn': '赛富时', 'en': 'Salesforce'},
+    'NFLX': {'cn': '奈飞', 'en': 'Netflix'},
+    'NOW': {'cn': 'ServiceNow', 'en': 'ServiceNow'},
+    'WDAY': {'cn': 'Workday', 'en': 'Workday'},
+    'ZM': {'cn': 'Zoom', 'en': 'Zoom'},
+    'DDOG': {'cn': 'Datadog', 'en': 'Datadog'},
+    'CRWD': {'cn': 'CrowdStrike', 'en': 'CrowdStrike'},
+    'ZS': {'cn': 'Zscaler', 'en': 'Zscaler'},
+    'PANW': {'cn': 'Palo Alto', 'en': 'Palo Alto Networks'},
+    'SNOW': {'cn': 'Snowflake', 'en': 'Snowflake'},
+    'PLTR': {'cn': 'Palantir', 'en': 'Palantir'},
+    'INTU': {'cn': 'Intuit', 'en': 'Intuit'},
+
+    # 电商/支付
+    'SHOP': {'cn': 'Shopify', 'en': 'Shopify'},
+    'SQ': {'cn': 'Block', 'en': 'Block/Square'},
+    'PYPL': {'cn': 'PayPal', 'en': 'PayPal'},
+    'COIN': {'cn': 'Coinbase', 'en': 'Coinbase'},
+    'HOOD': {'cn': 'Robinhood', 'en': 'Robinhood'},
+
+    # 社交媒体
+    'PINS': {'cn': 'Pinterest', 'en': 'Pinterest'},
+    'SNAP': {'cn': 'Snap', 'en': 'Snapchat'},
+
+    # 金融
+    'V': {'cn': 'Visa', 'en': 'Visa'},
+    'MA': {'cn': '万事达', 'en': 'Mastercard'},
+    'AXP': {'cn': '运通', 'en': 'American Express'},
+    'BLK': {'cn': '贝莱德', 'en': 'BlackRock'},
+
+    # 通信
+    'TMUS': {'cn': 'T-Mobile', 'en': 'T-Mobile'},
+    'VZ': {'cn': '威瑞森', 'en': 'Verizon'},
+    'CSCO': {'cn': '思科', 'en': 'Cisco'},
+    'CMCSA': {'cn': '康卡斯特', 'en': 'Comcast'},
+
+    # 其他
+    'DIS': {'cn': '迪士尼', 'en': 'Disney'},
+    'BIDU': {'cn': '百度', 'en': 'Baidu'},
+    'IBM': {'cn': 'IBM', 'en': 'IBM'},
+    'DELL': {'cn': '戴尔', 'en': 'Dell'},
+    'HPQ': {'cn': '惠普', 'en': 'HP'},
+    'MSTR': {'cn': '微策', 'en': 'MicroStrategy'},
+    'ADP': {'cn': 'ADP', 'en': 'ADP'},
+    'SPGI': {'cn': '标普全球', 'en': 'S&P Global'},
+    'MCO': {'cn': '穆迪', 'en': "Moody's"},
+}
+
+def get_stock_name(ticker: str) -> str:
+    """获取股票中文名称"""
+    info = STOCK_NAMES.get(ticker, {})
+    return info.get('cn', '') or info.get('en', ticker[:8])
 FACTOR_TYPES = [
     # 正向因子（越大越好）
     ('momentum_', 1, 0.10),
@@ -374,7 +455,7 @@ def calculate_composite_score(df_factors: pd.DataFrame, factor_weights: dict) ->
     return scores
 
 def send_email_report(df_result: pd.DataFrame, top20: list):
-    """发送邮件报告"""
+    """发送邮件报告 - 移动端优化版"""
     try:
         from utils.email_sender import EmailSender
 
@@ -398,29 +479,108 @@ def send_email_report(df_result: pd.DataFrame, top20: list):
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # 获取最新价格
+        prices = {}
+        try:
+            for ticker in top20:
+                df = get_stock_data(ticker, int((datetime.now() - timedelta(days=7)).timestamp()), int(datetime.now().timestamp()))
+                if df is not None and len(df) > 0:
+                    prices[ticker] = df['Close'].iloc[-1]
+        except Exception as e:
+            logger.debug(f"获取价格失败: {e}")
+
         html = f"""
+        <!DOCTYPE html>
         <html>
         <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <title>Alpha158 选股报告</title>
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                h1 {{ color: #2c3e50; }}
-                table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-                th, td {{ border: 1px solid #ddd; padding: 10px; text-align: center; }}
-                th {{ background-color: #3498db; color: white; }}
-                tr:nth-child(even) {{ background-color: #f2f2f2; }}
-                .buy {{ color: green; font-weight: bold; }}
-                .summary {{ background-color: #ecf0f1; padding: 15px; margin: 20px 0; }}
+                * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    background: #f0f2f5;
+                    padding: 10px;
+                    font-size: 14px;
+                    line-height: 1.5;
+                }}
+                .container {{ max-width: 100%; }}
+                h1 {{
+                    font-size: 18px;
+                    color: #1a1a1a;
+                    border-bottom: 2px solid #3498db;
+                    padding-bottom: 8px;
+                    margin-bottom: 10px;
+                }}
+                .date {{ color: #666; font-size: 12px; margin-bottom: 15px; }}
+                .summary {{
+                    background: #e8f4f8;
+                    padding: 10px;
+                    border-radius: 8px;
+                    margin-bottom: 15px;
+                    font-size: 13px;
+                }}
+                .stock-card {{
+                    background: white;
+                    border-radius: 8px;
+                    margin-bottom: 10px;
+                    padding: 12px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                    border-left: 4px solid #3498db;
+                }}
+                .card-header {{
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 8px;
+                }}
+                .symbol-name {{ display: flex; flex-direction: column; }}
+                .symbol {{ font-size: 16px; font-weight: bold; color: #1a1a1a; }}
+                .name {{ font-size: 12px; color: #666; }}
+                .price {{
+                    font-size: 18px;
+                    font-weight: bold;
+                    color: #3498db;
+                }}
+                .metrics {{
+                    display: flex;
+                    gap: 15px;
+                    border-top: 1px solid #eee;
+                    padding-top: 8px;
+                }}
+                .metric {{ display: flex; flex-direction: column; }}
+                .metric .label {{ font-size: 11px; color: #888; }}
+                .metric .value {{ font-size: 14px; font-weight: 500; }}
+                .positive {{ color: #28a745; }}
+                .negative {{ color: #dc3545; }}
+                .rank {{
+                    background: #3498db;
+                    color: white;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    margin-right: 8px;
+                }}
+                .footer {{
+                    margin-top: 20px;
+                    padding: 10px;
+                    background: #fff3cd;
+                    border-radius: 8px;
+                    font-size: 11px;
+                    color: #856404;
+                }}
             </style>
         </head>
         <body>
-            <h1>📊 Alpha158 多因子选股报告</h1>
-            <p>生成时间：{timestamp}</p>
-            <p>候选池：{len(df_result)} 只美股科技股 | 因子数：{len(df_result.columns)-1}</p>
+            <div class="container">
+                <h1>📊 Alpha158 多因子选股报告</h1>
+                <p class="date">{timestamp}</p>
+                <div class="summary">
+                    候选池：{len(df_result)} 只美股科技股 | 因子数：{len(df_result.columns)-1}
+                </div>
 
-            <div class="summary">
-                <h3>🏆 TOP 20 推荐</h3>
-                <table>
-                    <tr><th>排名</th><th>代码</th><th>综合得分</th><th>6 月动量</th><th>夏普</th><th>波动</th></tr>
+                <h2 style="font-size:15px;color:#333;margin:15px 0 10px;padding-left:8px;border-left:3px solid #3498db;">🏆 TOP 20 推荐</h2>
         """
 
         for i, ticker in enumerate(top20):
@@ -428,21 +588,45 @@ def send_email_report(df_result: pd.DataFrame, top20: list):
             mom = get_momentum(row)
             sharpe = row.get('sharpe_ratio_20d', 0)
             vol = row.get('volatility_20d', 0)
+            name = get_stock_name(ticker)
+            price = prices.get(ticker, 'N/A')
+            price_str = f"${price:.2f}" if isinstance(price, (int, float)) else price
+
             html += f"""
-                    <tr>
-                        <td>{i+1}</td>
-                        <td class="buy">{ticker}</td>
-                        <td>{row['score']:.3f}</td>
-                        <td>{mom:.1f}%</td>
-                        <td>{sharpe:.2f}</td>
-                        <td>{vol:.2f}</td>
-                    </tr>"""
+                <div class="stock-card">
+                    <div class="card-header">
+                        <div class="symbol-name">
+                            <span class="symbol"><span class="rank">{i+1}</span>{ticker}</span>
+                            <span class="name">{name}</span>
+                        </div>
+                        <div class="price">{price_str}</div>
+                    </div>
+                    <div class="metrics">
+                        <div class="metric">
+                            <span class="label">得分</span>
+                            <span class="value">{row['score']:.3f}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="label">6月动量</span>
+                            <span class="value {'positive' if mom > 0 else 'negative'}">{mom:+.1f}%</span>
+                        </div>
+                        <div class="metric">
+                            <span class="label">夏普</span>
+                            <span class="value">{sharpe:.2f}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="label">波动</span>
+                            <span class="value">{vol:.1f}%</span>
+                        </div>
+                    </div>
+                </div>
+            """
 
         html += f"""
-                </table>
+                <div class="footer">
+                    ⚠️ 免责声明: 本报告由AI生成，仅供参考，不构成投资建议。投资有风险，入市需谨慎。
+                </div>
             </div>
-            <hr>
-            <p><small>Generated by Alpha158 Ranking System</small></p>
         </body>
         </html>
         """
@@ -860,40 +1044,149 @@ def _analyze_top_stocks_with_llm(top_stocks: list, df_result: pd.DataFrame, api_
 
 
 def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, top20: list) -> str:
-    """Generate enhanced HTML report with LLM summaries."""
+    """Generate enhanced HTML report with LLM summaries - 移动端优化版"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 获取最新价格
+    prices = {}
+    try:
+        for ticker in top20[:10]:  # 只获取前10只的价格
+            df = get_stock_data(ticker, int((datetime.now() - timedelta(days=7)).timestamp()), int(datetime.now().timestamp()))
+            if df is not None and len(df) > 0:
+                prices[ticker] = df['Close'].iloc[-1]
+    except Exception as e:
+        logger.debug(f"获取价格失败: {e}")
+
     html = f"""
+    <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>Alpha158 选股报告</title>
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }}
-            h1 {{ color: #2c3e50; }}
-            h2 {{ color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; }}
-            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-            th, td {{ border: 1px solid #ddd; padding: 10px; text-align: center; }}
-            th {{ background-color: #3498db; color: white; }}
-            tr:nth-child(even) {{ background-color: #f2f2f2; }}
-            .stock-card {{ border: 1px solid #ddd; padding: 15px; margin: 15px 0; border-radius: 8px; background: #fafafa; }}
-            .stock-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
-            .stock-name {{ font-size: 18px; font-weight: bold; color: #2c3e50; }}
-            .stock-score {{ background: #3498db; color: white; padding: 5px 10px; border-radius: 4px; }}
-            .news-summary {{ background: #fff3cd; padding: 10px; border-left: 4px solid #ffc107; margin: 10px 0; }}
-            .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }}
-            .metric {{ background: #e8f4f8; padding: 8px; border-radius: 4px; text-align: center; }}
-            .metric-label {{ font-size: 12px; color: #666; }}
-            .metric-value {{ font-size: 16px; font-weight: bold; color: #2c3e50; }}
+            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: #f0f2f5;
+                padding: 10px;
+                font-size: 14px;
+                line-height: 1.5;
+            }}
+            .container {{ max-width: 100%; }}
+            h1 {{
+                font-size: 18px;
+                color: #1a1a1a;
+                border-bottom: 2px solid #3498db;
+                padding-bottom: 8px;
+                margin-bottom: 10px;
+            }}
+            h2 {{
+                font-size: 15px;
+                color: #333;
+                margin: 15px 0 10px;
+                padding-left: 8px;
+                border-left: 3px solid #3498db;
+            }}
+            .date {{ color: #666; font-size: 12px; margin-bottom: 15px; }}
+            .summary {{
+                background: #e8f4f8;
+                padding: 10px;
+                border-radius: 8px;
+                margin-bottom: 15px;
+                font-size: 13px;
+            }}
+            .stock-card {{
+                background: white;
+                border-radius: 8px;
+                margin-bottom: 10px;
+                padding: 12px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                border-left: 4px solid #3498db;
+            }}
+            .card-header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 8px;
+            }}
+            .symbol-name {{ display: flex; flex-direction: column; }}
+            .symbol {{ font-size: 16px; font-weight: bold; color: #1a1a1a; }}
+            .name {{ font-size: 12px; color: #666; }}
+            .price {{
+                font-size: 18px;
+                font-weight: bold;
+                color: #3498db;
+            }}
+            .metrics {{
+                display: flex;
+                gap: 15px;
+                border-top: 1px solid #eee;
+                padding-top: 8px;
+            }}
+            .metric {{ display: flex; flex-direction: column; }}
+            .metric .label {{ font-size: 11px; color: #888; }}
+            .metric .value {{ font-size: 14px; font-weight: 500; }}
+            .positive {{ color: #28a745; }}
+            .negative {{ color: #dc3545; }}
+            .rank {{
+                background: #3498db;
+                color: white;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                margin-right: 8px;
+            }}
+            .analysis-card {{
+                background: white;
+                border-radius: 8px;
+                margin-bottom: 10px;
+                padding: 12px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                border-left: 4px solid #28a745;
+            }}
+            .analysis-title {{
+                font-size: 16px;
+                font-weight: bold;
+                color: #1a1a1a;
+                margin-bottom: 8px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }}
+            .analysis-metrics {{
+                display: flex;
+                gap: 15px;
+                margin-bottom: 10px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #eee;
+            }}
+            .analysis-content {{
+                background: #f8f9fa;
+                padding: 10px;
+                border-radius: 6px;
+                font-size: 13px;
+                line-height: 1.6;
+            }}
+            .footer {{
+                margin-top: 20px;
+                padding: 10px;
+                background: #fff3cd;
+                border-radius: 8px;
+                font-size: 11px;
+                color: #856404;
+            }}
         </style>
     </head>
     <body>
-        <h1>📊 Alpha158 多因子选股报告 - 增强版</h1>
-        <p>生成时间：{timestamp}</p>
-        <p>候选池：{len(df_result)} 只美股科技股 | 因子数：{len(df_result.columns)-1}</p>
+        <div class="container">
+            <h1>📊 Alpha158 多因子选股报告</h1>
+            <p class="date">{timestamp}</p>
+            <div class="summary">
+                候选池：{len(df_result)} 只美股科技股 | 因子数：{len(df_result.columns)-1}
+            </div>
 
-        <h2>🏆 TOP 20 推荐</h2>
-        <table>
-            <tr><th>排名</th><th>代码</th><th>综合得分</th><th>6 月动量</th><th>夏普比率</th><th>波动率</th></tr>
+            <h2>🏆 TOP 20 推荐</h2>
     """
 
     for i, ticker in enumerate(top20):
@@ -901,57 +1194,88 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
         mom = get_momentum(row)
         sharpe = row.get('sharpe_ratio_20d', 0)
         vol = row.get('volatility_20d', 0)
+        name = get_stock_name(ticker)
+        price = prices.get(ticker, 'N/A')
+        price_str = f"${price:.2f}" if isinstance(price, (int, float)) else price
+
         html += f"""
-            <tr>
-                <td>{i+1}</td>
-                <td><strong>{ticker}</strong></td>
-                <td>{row['score']:.3f}</td>
-                <td>{mom:.1f}%</td>
-                <td>{sharpe:.2f}</td>
-                <td>{vol:.1f}%</td>
-            </tr>"""
+            <div class="stock-card">
+                <div class="card-header">
+                    <div class="symbol-name">
+                        <span class="symbol"><span class="rank">{i+1}</span>{ticker}</span>
+                        <span class="name">{name}</span>
+                    </div>
+                    <div class="price">{price_str}</div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="label">得分</span>
+                        <span class="value">{row['score']:.3f}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">6月动量</span>
+                        <span class="value {'positive' if mom > 0 else 'negative'}">{mom:+.1f}%</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">夏普</span>
+                        <span class="value">{sharpe:.2f}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">波动</span>
+                        <span class="value">{vol:.1f}%</span>
+                    </div>
+                </div>
+            </div>
+        """
 
     html += """
-        </table>
-
-        <h2>📰 TOP 5 股票深度分析</h2>
+            <h2>📰 TOP 5 股票深度分析</h2>
     """
 
     # Add detailed analysis for top 5 stocks
     for stock in top_stocks_analysis[:5]:
         ticker = stock['ticker']
         analysis = stock.get('analysis', '暂无分析')
+        name = get_stock_name(ticker)
+        price = prices.get(ticker, 'N/A')
+        price_str = f"${price:.2f}" if isinstance(price, (int, float)) else price
 
         html += f"""
-        <div class="stock-card">
-            <div class="stock-header">
-                <span class="stock-name">{ticker}</span>
-                <span class="stock-score">得分：{stock['score']:.3f}</span>
+        <div class="analysis-card">
+            <div class="analysis-title">
+                <span>{ticker} <span style="font-size:12px;color:#666;font-weight:normal;">{name}</span></span>
+                <span style="color:#3498db;">{price_str}</span>
             </div>
-            <div class="metrics">
+            <div class="analysis-metrics">
                 <div class="metric">
-                    <div class="metric-label">6 月动量</div>
-                    <div class="metric-value">{stock['momentum_120d']:.1f}%</div>
+                    <span class="label">得分</span>
+                    <span class="value">{stock['score']:.3f}</span>
                 </div>
                 <div class="metric">
-                    <div class="metric-label">夏普比率</div>
-                    <div class="metric-value">{stock['sharpe']:.2f}</div>
+                    <span class="label">6月动量</span>
+                    <span class="value {'positive' if stock['momentum_120d'] > 0 else 'negative'}">{stock['momentum_120d']:+.1f}%</span>
                 </div>
                 <div class="metric">
-                    <div class="metric-label">波动率</div>
-                    <div class="metric-value">{stock['volatility']:.1f}%</div>
+                    <span class="label">夏普</span>
+                    <span class="value">{stock['sharpe']:.2f}</span>
+                </div>
+                <div class="metric">
+                    <span class="label">波动</span>
+                    <span class="value">{stock['volatility']:.1f}%</span>
                 </div>
             </div>
-            <div class="news-summary">
-                <strong>🤖 LLM 因子分析：</strong><br>
+            <div class="analysis-content">
+                <strong>🤖 LLM 分析：</strong><br>
                 {analysis.replace(chr(10), '<br>')}
             </div>
         </div>
         """
 
     html += """
-        <hr>
-        <p><small>Generated by Alpha158 Ranking System with Qwen LLM</small></p>
+            <div class="footer">
+                ⚠️ 免责声明: 本报告由AI生成，仅供参考，不构成投资建议。投资有风险，入市需谨慎。
+            </div>
+        </div>
     </body>
     </html>
     """
