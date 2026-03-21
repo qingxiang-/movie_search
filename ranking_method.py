@@ -85,7 +85,7 @@ STOCK_NAMES = {
     'META': {'cn': 'Meta', 'en': 'Meta/Facebook'},
     'TSLA': {'cn': '特斯拉', 'en': 'Tesla'},
 
-    # 半导体
+    # 半导体设备
     'AVGO': {'cn': '博通', 'en': 'Broadcom'},
     'AMD': {'cn': 'AMD', 'en': 'AMD'},
     'QCOM': {'cn': '高通', 'en': 'Qualcomm'},
@@ -98,8 +98,29 @@ STOCK_NAMES = {
     'LRCX': {'cn': '拉姆研究', 'en': 'Lam Research'},
     'KLAC': {'cn': '科磊', 'en': 'KLA'},
     'MRVL': {'cn': '迈威尔', 'en': 'Marvell'},
+    'TER': {'cn': '泰瑞达', 'en': 'Teradyne'},
+    'KEYS': {'cn': '是德科技', 'en': 'Keysight'},
+    'CDNS': {'cn': '铿腾电子', 'en': 'Cadence'},
+    'SNPS': {'cn': '新思科技', 'en': 'Synopsys'},
+    'AMKR': {'cn': '安靠', 'en': 'Amkor'},
+    'MPWR': {'cn': 'Monolithic Power', 'en': 'Monolithic Power'},
+    'MCHP': {'cn': '微芯', 'en': 'Microchip'},
+    'ON': {'cn': '安森美', 'en': 'ON Semiconductor'},
+    'FORM': {'cn': 'FormFactor', 'en': 'FormFactor'},
+    'CAMT': {'cn': 'Camtek', 'en': 'Camtek'},
 
-    # 软件/云
+    # 光伏/新能源
+    'FSLR': {'cn': '第一太阳能', 'en': 'First Solar'},
+    'SEDG': {'cn': 'SolarEdge', 'en': 'SolarEdge'},
+    'ENPH': {'cn': 'Enphase', 'en': 'Enphase Energy'},
+    'RUN': {'cn': 'Sunrun', 'en': 'Sunrun'},
+
+    # 存储芯片
+    'WDC': {'cn': '西部数据', 'en': 'Western Digital'},
+    'STX': {'cn': '希捷', 'en': 'Seagate'},
+    'NTAP': {'cn': 'NetApp', 'en': 'NetApp'},
+
+    # 软件/云/SaaS
     'ADBE': {'cn': 'Adobe', 'en': 'Adobe'},
     'CRM': {'cn': '赛富时', 'en': 'Salesforce'},
     'NFLX': {'cn': '奈飞', 'en': 'Netflix'},
@@ -113,40 +134,96 @@ STOCK_NAMES = {
     'SNOW': {'cn': 'Snowflake', 'en': 'Snowflake'},
     'PLTR': {'cn': 'Palantir', 'en': 'Palantir'},
     'INTU': {'cn': 'Intuit', 'en': 'Intuit'},
+    'MDB': {'cn': 'MongoDB', 'en': 'MongoDB'},
+    'ESTC': {'cn': 'Elastic', 'en': 'Elastic'},
+    'HUBS': {'cn': 'HubSpot', 'en': 'HubSpot'},
+    'OKTA': {'cn': 'Okta', 'en': 'Okta'},
+    'NET': {'cn': 'Cloudflare', 'en': 'Cloudflare'},
+    'DT': {'cn': 'Dynatrace', 'en': 'Dynatrace'},
+    'GDDY': {'cn': 'GoDaddy', 'en': 'GoDaddy'},
+    'APP': {'cn': 'AppLovin', 'en': 'AppLovin'},
+    'CFLT': {'cn': 'Confluent', 'en': 'Confluent'},
+    'PATH': {'cn': 'UiPath', 'en': 'UiPath'},
+    'TEAM': {'cn': 'Atlassian', 'en': 'Atlassian'},
+    'U': {'cn': 'Unity', 'en': 'Unity Software'},
+    'ANSS': {'cn': 'Ansys', 'en': 'Ansys'},
+    'ZEN': {'cn': 'Zendesk', 'en': 'Zendesk'},
+    'COUP': {'cn': 'Coupa', 'en': 'Coupa'},
+    'VEEV': {'cn': 'Veeva', 'en': 'Veeva Systems'},
+    'FROG': {'cn': 'JFrog', 'en': 'JFrog'},
 
-    # 电商/支付
+    # 电商/支付/金融科技
     'SHOP': {'cn': 'Shopify', 'en': 'Shopify'},
     'SQ': {'cn': 'Block', 'en': 'Block/Square'},
     'PYPL': {'cn': 'PayPal', 'en': 'PayPal'},
     'COIN': {'cn': 'Coinbase', 'en': 'Coinbase'},
     'HOOD': {'cn': 'Robinhood', 'en': 'Robinhood'},
+    'UPST': {'cn': 'Upstart', 'en': 'Upstart'},
+    'SOFI': {'cn': 'SoFi', 'en': 'SoFi Technologies'},
+    'AFRM': {'cn': 'Affirm', 'en': 'Affirm'},
 
-    # 社交媒体
+    # 社交媒体/游戏
     'PINS': {'cn': 'Pinterest', 'en': 'Pinterest'},
     'SNAP': {'cn': 'Snap', 'en': 'Snapchat'},
+    'TTD': {'cn': 'Trade Desk', 'en': 'Trade Desk'},
+    'RBLX': {'cn': 'Roblox', 'en': 'Roblox'},
+    'TTWO': {'cn': 'Take-Two', 'en': 'Take-Two Interactive'},
+    'EA': {'cn': '艺电', 'en': 'Electronic Arts'},
 
     # 金融
     'V': {'cn': 'Visa', 'en': 'Visa'},
     'MA': {'cn': '万事达', 'en': 'Mastercard'},
     'AXP': {'cn': '运通', 'en': 'American Express'},
     'BLK': {'cn': '贝莱德', 'en': 'BlackRock'},
+    'ADP': {'cn': 'ADP', 'en': 'ADP'},
+    'PAYX': {'cn': 'Paychex', 'en': 'Paychex'},
+    'FIS': {'cn': 'FIS', 'en': 'Fidelity National'},
+    'FISV': {'cn': 'Fiserv', 'en': 'Fiserv'},
+    'CME': {'cn': '芝商所', 'en': 'CME Group'},
+    'MCO': {'cn': '穆迪', 'en': "Moody's"},
+    'SPGI': {'cn': '标普全球', 'en': 'S&P Global'},
+    'NTRS': {'cn': '北方信托', 'en': 'Northern Trust'},
+    'MSCI': {'cn': 'MSCI', 'en': 'MSCI'},
 
     # 通信
     'TMUS': {'cn': 'T-Mobile', 'en': 'T-Mobile'},
     'VZ': {'cn': '威瑞森', 'en': 'Verizon'},
+    'NOK': {'cn': '诺基亚', 'en': 'Nokia'},
     'CSCO': {'cn': '思科', 'en': 'Cisco'},
+    'ERIC': {'cn': '爱立信', 'en': 'Ericsson'},
     'CMCSA': {'cn': '康卡斯特', 'en': 'Comcast'},
+    'CHTR': {'cn': '特许通讯', 'en': 'Charter Communications'},
 
-    # 其他
+    # 其他科技
     'DIS': {'cn': '迪士尼', 'en': 'Disney'},
     'BIDU': {'cn': '百度', 'en': 'Baidu'},
     'IBM': {'cn': 'IBM', 'en': 'IBM'},
     'DELL': {'cn': '戴尔', 'en': 'Dell'},
     'HPQ': {'cn': '惠普', 'en': 'HP'},
+    'HPE': {'cn': '慧与', 'en': 'HPE'},
     'MSTR': {'cn': '微策', 'en': 'MicroStrategy'},
-    'ADP': {'cn': 'ADP', 'en': 'ADP'},
-    'SPGI': {'cn': '标普全球', 'en': 'S&P Global'},
-    'MCO': {'cn': '穆迪', 'en': "Moody's"},
+    'ATVI': {'cn': '动视暴雪', 'en': 'Activision Blizzard'},
+    'NICE': {'cn': 'Nice', 'en': 'Nice'},
+    'FTNT': {'cn': 'Fortinet', 'en': 'Fortinet'},
+    'CYBR': {'cn': 'CyberArk', 'en': 'CyberArk'},
+    'TENB': {'cn': 'Tenable', 'en': 'Tenable'},
+    'S': {'cn': 'SentinelOne', 'en': 'SentinelOne'},
+
+    # 小盘/其他
+    'AXTI': {'cn': 'AXT', 'en': 'AXT Inc'},
+    'HIMX': {'cn': '奇景光电', 'en': 'Himax Technologies'},
+    'CEVA': {'cn': 'CEVA', 'en': 'CEVA'},
+    'SLAB': {'cn': 'Silicon Labs', 'en': 'Silicon Laboratories'},
+    'DIOD': {'cn': 'Diodes', 'en': 'Diodes Inc'},
+    'MXL': {'cn': 'MaxLinear', 'en': 'MaxLinear'},
+    'SIMO': {'cn': '硅力杰', 'en': 'Silicon Motion'},
+    'DQ': {'cn': '大全新能源', 'en': 'Daqo New Energy'},
+    'LSCC': {'cn': 'Lattice', 'en': 'Lattice Semiconductor'},
+    'VSAT': {'cn': 'ViaSat', 'en': 'Viasat'},
+    'SSYS': {'cn': 'Stratasys', 'en': 'Stratasys'},
+    'COHR': {'cn': '相干', 'en': 'Coherent'},
+    'CHK': {'cn': '切萨皮克', 'en': 'Chesapeake Energy'},
+    'MXIM': {'cn': '美信', 'en': 'Maxim Integrated'},
 }
 
 def get_stock_name(ticker: str) -> str:
