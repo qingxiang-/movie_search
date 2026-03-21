@@ -15,7 +15,6 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page
 import httpx
 from dotenv import load_dotenv
-import openai
 
 from prompts import get_planning_prompt, get_analysis_prompt
 
@@ -57,13 +56,20 @@ class MovieSearcher:
         self.movie_name = ""  # 作为类变量，支持动态更新
         self.current_engine_index = 0  # 当前使用的搜索引擎索引
         self.llm_provider = LLM_PROVIDER
-        
-        # 配置 Azure OpenAI
-        if self.llm_provider == "azure" and AZURE_OPENAI_API_KEY:
-            openai.api_type = "azure"
-            openai.api_key = AZURE_OPENAI_API_KEY
-            openai.api_base = AZURE_OPENAI_ENDPOINT
-            openai.api_version = AZURE_OPENAI_API_VERSION
+
+        # Azure OpenAI 客户端 (延迟初始化)
+        self._azure_client = None
+
+    def _get_azure_client(self):
+        """获取 Azure OpenAI 客户端 (延迟初始化)"""
+        if self._azure_client is None:
+            from openai import AzureOpenAI
+            self._azure_client = AzureOpenAI(
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+                azure_endpoint=AZURE_OPENAI_ENDPOINT.rstrip('/') if AZURE_OPENAI_ENDPOINT else ""
+            )
+        return self._azure_client
 
     async def close(self):
         """关闭 HTTP 客户端"""
@@ -73,17 +79,18 @@ class MovieSearcher:
         """调用 LLM API (支持 Qwen 和 Azure OpenAI)"""
         try:
             if self.llm_provider == "azure":
-                # 调用 Azure OpenAI (使用 openai v0.28.1 API)
+                # 使用新版 Azure OpenAI SDK
+                client = self._get_azure_client()
                 response = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: openai.ChatCompletion.create(
-                        engine=AZURE_OPENAI_DEPLOYMENT,
+                    lambda: client.chat.completions.create(
+                        model=AZURE_OPENAI_DEPLOYMENT,
                         messages=messages,
                         temperature=temperature,
                         max_completion_tokens=max_tokens
                     )
                 )
-                content = response.choices[0].message["content"]
+                content = response.choices[0].message.content
                 return {"success": True, "content": content}
             else:
                 # 调用 Qwen API

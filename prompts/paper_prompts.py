@@ -161,6 +161,16 @@ def get_decision_making_prompt(context: Dict[str, Any]) -> str:
 发表时间: {paper.get('published_date', 'N/A')}
 来源: {paper.get('venue', 'N/A')}
 
+【引用数评估指南 - P1 优化】
+引用数需要结合论文发表时间来看:
+- 发表 < 7 天：引用数=0 是正常的，不扣分
+- 发表 7-14 天：期望 1-5 引用
+- 发表 > 14 天：期望 5+ 引用
+
+归一化引用数 = citations / (days_since_publish / 7 + 1)
+示例：14 天前发表 2 引用 → normalized=2/(14/7+1)=0.67; 30 天前发表 10 引用 → normalized=10/(30/7+1)=1.89
+
+
 【评估标准】(0-10分) - 重点关注洞察力和影响力
 1. **洞察力 Insight (35%)**：是否提出新视角、新理解、新方法
    - 提出全新的问题框架或解决思路
@@ -171,6 +181,7 @@ def get_decision_making_prompt(context: Dict[str, Any]) -> str:
    - 解决领域内的关键挑战或瓶颈
    - 可能产生广泛影响或启发后续研究
    - 实际应用价值高
+   - **参考归一化引用数**：>2 为高影响力，0.5-2 为中等，<0.5 为早期或低影响
 
 3. **相关性 (20%)**：与搜索主题的匹配度
 
@@ -472,3 +483,211 @@ def get_topic_refinement_prompt(context: Dict[str, Any]) -> str:
 }}
 
 请分析并给出建议。"""
+
+
+def get_keyword_generation_prompt(context: Dict[str, Any]) -> str:
+    """
+    获取关键词生成提示词（动态关键词模式）
+
+    Args:
+        context: 包含 user_interests, num_keywords, keywords_per_topic, history_keywords 等
+
+    Returns:
+        格式化的提示词
+    """
+    user_interests = context.get("user_interests", "AI, LLM, Agent")
+    num_keywords = context.get("num_keywords", 8)
+    keywords_per_topic = context.get("keywords_per_topic", 2)
+    history_keywords = context.get("history_keywords", [])
+    recent_papers = context.get("recent_papers", [])
+
+    # 构建历史关键词列表
+    history_str = ""
+    if history_keywords:
+        history_str = "\n".join([f"- {kw}" for kw in history_keywords[-20:]])
+    else:
+        history_str = "无（首次运行）"
+
+    # 构建近期论文摘要
+    recent_str = ""
+    if recent_papers:
+        recent_str = "\n".join([
+            f"- {p.get('title', 'N/A')[:80]}: {p.get('summary', 'N/A')[:100]}..."
+            for p in recent_papers[:5]
+        ])
+    else:
+        recent_str = "无近期论文数据"
+
+    return f"""你是AI研究趋势分析专家，专门为学术论文搜索生成高质量关键词。
+
+【任务】
+根据用户兴趣领域，生成最有价值的搜索关键词。**必须是 2025-2026 年的最新研究方向**。
+
+【用户兴趣领域】
+{user_interests}
+
+【关键词数量要求】
+- 生成 {num_keywords} 组搜索关键词
+- 每组关键词包含 {keywords_per_topic} 个紧密相关的变体
+
+【重要：生成前沿关键词】
+- **必须优先选择 2025-2026 年的最新技术**
+- 关注最近 3-6 个月内的热门研究方向
+- 优先使用新技术名称、最新模型架构、最新训练方法
+
+【过时关键词（必须避免）】
+以下关键词已经过时，不要生成：
+- 旧模型名：Claude 3.5, GPT-4V, GPT-4, Claude 2, CodeLlama, LLaMA 2, Gemini Pro, GPT-3.5
+- 旧技术：AlphaGo, AlphaZero, BERT, Transformer, InstructGPT, RLHF
+- 旧概念：Chain of Thought
+
+【只使用研究方向/技术概念，不要使用具体模型名】
+- 推理技术：Test-Time Compute, Reasoning Scaling, Monte Carlo Tree Search, Self-Correction
+- 训练方法：GRPO, RLVR, DPO, Reinforcement Learning from AI Feedback
+- 研究方向：Multimodal Reasoning, Agent Planning, Tool Use, Code Generation, Math Reasoning
+- 模型架构：Mixture of Experts, Sparse Architecture, Efficient Transformer
+
+【历史搜索关键词（避免重复）】
+{history_str}
+
+【近期热门论文参考】
+{recent_str}
+
+【输出要求】
+返回 JSON 格式:
+{{
+    "keywords": [
+        {{
+            "topic": "主题名称（如：LLM Agent）",
+            "keywords": ["关键词1", "关键词2"],
+            "priority": 1-5（优先级，5最高）
+        }},
+        ...
+    ],
+    "reasoning": "生成理由简述"
+}}
+
+请生成关键词，必须是 2025-2026 年的最新研究方向，避免使用过时关键词！"""
+
+
+def get_keyword_refinement_prompt(context: Dict[str, Any]) -> str:
+    """
+    获取关键词优化提示词
+
+    当搜索效果不理想时，优化关键词策略
+
+    Args:
+        context: 包含 current_keywords, search_results, quality_scores 等
+
+    Returns:
+        格式化的提示词
+    """
+    current_keywords = context.get("current_keywords", [])
+    avg_papers_found = context.get("avg_papers_found", 0)
+    avg_relevant = context.get("avg_relevant", 0)
+    avg_quality = context.get("avg_quality", 0.0)
+    issues = context.get("issues", "")
+
+    keywords_str = "\n".join([f"- {kw}" for kw in current_keywords]) if current_keywords else "无"
+
+    return f"""你是AI研究趋势分析专家，负责优化搜索关键词。
+
+【当前使用的关键词】
+{keywords_str}
+
+【搜索效果反馈】
+- 平均找到论文数: {avg_papers_found:.1f}
+- 平均相关论文数: {avg_relevant:.1f}
+- 平均质量评分: {avg_quality:.1f}/10
+
+【问题分析】
+{issues if issues else '效果良好，无需优化'}
+
+【任务】
+根据搜索效果反馈，优化关键词策略。
+
+【可选策略】
+1. keep: 保持当前关键词，效果良好
+2. refine: 细化当前关键词，结果太宽泛
+3. expand: 扩展关键词，覆盖更多方向
+4. replace: 完全替换为新关键词，效果差
+
+【输出要求】
+返回 JSON 格式:
+{{
+    "strategy": "keep/refine/expand/replace",
+    "reason": "优化理由",
+    "new_keywords": ["新关键词列表（如果替换）"],
+    "expected_improvement": "预期改进效果"
+}}
+
+请给出优化建议。"""
+
+
+def get_keyword_discovery_prompt(context: Dict[str, Any]) -> str:
+    """
+    从搜索结果中发现新关键词
+
+    根据当前关键词的搜索结果，分析并发现新的相关关键词
+
+    Args:
+        context: 包含 current_keyword, search_results, papers 等
+
+    Returns:
+        格式化的提示词
+    """
+    current_keyword = context.get("current_keyword", "")
+    papers = context.get("papers", [])
+    existing_keywords = context.get("existing_keywords", [])
+
+    # 构建论文信息摘要
+    papers_summary = ""
+    if papers:
+        for i, paper in enumerate(papers[:10], 1):
+            title = paper.get('title', 'N/A')[:80]
+            abstract = paper.get('abstract') or paper.get('summary', '') or ''
+            if abstract:
+                abstract = abstract[:200]
+            papers_summary += f"\n{i}. {title}\n   摘要: {abstract}..."
+
+    existing_str = ", ".join(existing_keywords) if existing_keywords else "无"
+
+    return f"""你是AI研究趋势分析专家，负责从论文搜索结果中发现新的相关关键词。
+
+【当前搜索关键词】
+{current_keyword}
+
+【已有关键词池（避免重复）】
+{existing_str}
+
+【搜索到的论文（分析这些论文的标题和摘要）】{papers_summary}
+
+【任务】
+分析上述论文，发现与当前关键词相关的新关键词。
+
+【要求】
+1. 从论文标题、摘要中提取新出现的概念、模型、技术
+2. 关注 2025-2026 年的最新研究方向
+3. 优先发现：新技术名称、新模型架构、新的训练方法
+4. **禁止使用过时模型**（见下方列表）
+5. 返回 3-8 个新关键词
+
+【禁止的过时关键词 - 绝对不要返回】
+- 旧模型名：Claude 3.5, GPT-4V, GPT-4, Claude 2, CodeLlama, LLaMA 2, Gemini Pro, GPT-3.5
+- 旧技术：AlphaGo, AlphaZero, BERT, Transformer, InstructGPT, RLHF
+- 旧概念：Chain of Thought（已过时）
+
+【只使用研究方向/技术概念，不要使用具体模型名】
+- 推理技术：Test-Time Compute, Reasoning Scaling, Monte Carlo Tree Search, Self-Correction
+- 训练方法：GRPO, RLVR, DPO, Reinforcement Learning from AI Feedback
+- 研究方向：Multimodal Reasoning, Agent Planning, Tool Use, Code Generation, Math Reasoning
+- 模型架构：Mixture of Experts, Sparse Architecture, Efficient Transformer
+
+【输出要求】
+返回 JSON 格式:
+{{
+    "discovered_keywords": ["关键词1", "关键词2", ...],
+    "reasoning": "发现理由简述"
+}}
+
+请从论文中提取新关键词。"""

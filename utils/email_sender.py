@@ -1,11 +1,14 @@
 """
-Email Sender - 邮件发送功能（基于阿里云 DirectMail）
+Email Sender - 邮件发送功能（支持SMTP和阿里云 DirectMail）
 """
 
 import os
 import yaml
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # 加载 .env 文件（如果存在）
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
@@ -17,39 +20,64 @@ if os.path.exists(dotenv_path):
                 key, value = line.split('=', 1)
                 os.environ.setdefault(key.strip(), value.strip())
 
-from alibabacloud_dm20151123.client import Client as Dm20151123Client
-from alibabacloud_tea_openapi import models as open_api_models
-from alibabacloud_dm20151123 import models as dm_20151123_models
-from alibabacloud_tea_util import models as util_models
+# 阿里云SDK（可选）
+try:
+    from alibabacloud_dm20151123.client import Client as Dm20151123Client
+    from alibabacloud_tea_openapi import models as open_api_models
+    from alibabacloud_dm20151123 import models as dm_20151123_models
+    from alibabacloud_tea_util import models as util_models
+    ALIYUN_SDK_AVAILABLE = True
+except ImportError:
+    ALIYUN_SDK_AVAILABLE = False
 
 
 class EmailSender:
-    """邮件发送器（阿里云 DirectMail）"""
-    
+    """邮件发送器（支持SMTP和阿里云 DirectMail）"""
+
     def __init__(self, config_file: str = "email_config.yaml"):
         """初始化邮件发送器"""
         # 从 .env 读取阿里云 AccessKey（保密信息）
         self.access_key_id = os.getenv("ALIYUN_ACCESS_KEY_ID", "")
         self.access_key_secret = os.getenv("ALIYUN_ACCESS_KEY_SECRET", "")
-        
-        # 从 YAML 读取邮件配置（非保密信息）
+
+        # 从 YAML 读取邮件配置
         self.sender_email = ""
         self.recipients = []
         self.region = "cn-hangzhou"
-        
+
+        # SMTP 配置
+        self.smtp_server = ""
+        self.smtp_port = 587
+        self.smtp_password = ""
+
         try:
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
                 self.sender_email = config.get('sender', '')
                 self.recipients = config.get('recipients', [])
                 self.region = config.get('settings', {}).get('region', 'cn-hangzhou')
+                # SMTP 配置
+                self.smtp_server = config.get('smtp_server', '')
+                self.smtp_port = config.get('smtp_port', 587)
         except Exception as e:
             print(f"⚠️  读取邮件配置文件失败: {e}，使用默认配置")
-        
-        # 初始化阿里云客户端
+
+        # 从 .env 读取SMTP密码（优先级高于yaml配置）
+        env_smtp_password = os.getenv("SMTP_PASSWORD", "")
+        if env_smtp_password:
+            self.smtp_password = env_smtp_password
+
+        # 初始化阿里云客户端（如果有配置）
         self.client = None
-        if self.access_key_id and self.access_key_secret:
+        if ALIYUN_SDK_AVAILABLE and self.access_key_id and self.access_key_secret:
             self.client = self._create_client()
+
+        # 判断使用哪种发送方式
+        self.use_smtp = bool(self.smtp_server and self.smtp_password)
+        if self.use_smtp:
+            print(f"📧 使用SMTP发送邮件: {self.smtp_server}:{self.smtp_port}")
+        elif self.client:
+            print(f"📧 使用阿里云DirectMail发送邮件")
     
     def _generate_detailed_html(self, papers: List[Dict[str, Any]], topic: str, date_range: str) -> str:
         """
@@ -255,13 +283,17 @@ class EmailSender:
     def _send_to_recipient(self, recipient: str, subject: str, html_body: str) -> bool:
         """发送邮件到单个收件人（使用阿里云 SDK）"""
         try:
+            # 简化邮件主题，避免触发垃圾邮件过滤器
+            safe_subject = subject.replace("AI Research Digest", "Research Digest")
+
             request = dm_20151123_models.SingleSendMailRequest(
                 account_name=self.sender_email,
                 address_type=1,
                 reply_to_address=False,
                 to_address=recipient,
-                subject=subject,
-                html_body=html_body
+                subject=safe_subject,
+                html_body=html_body,
+                from_alias="Research Digest"  # 发件人别名，增加可信度
             )
             runtime = util_models.RuntimeOptions()
             response = self.client.single_send_mail_with_options(request, runtime)
@@ -525,11 +557,7 @@ class EmailSender:
             return False
     
     def test_connection(self) -> bool:
-        """测试阿里云 DirectMail 配置"""
-        if not self.access_key_id or not self.access_key_secret:
-            print("❌ 阿里云 AccessKey 未配置")
-            return False
-
+        """测试邮件配置"""
         if not self.sender_email:
             print("❌ 发件人地址未配置")
             return False
@@ -541,8 +569,32 @@ class EmailSender:
         print(f"✅ 邮件配置检查通过")
         print(f"   发件人: {self.sender_email}")
         print(f"   收件人: {', '.join(self.recipients)}")
-        print(f"   区域: {self.region}")
+        if self.use_smtp:
+            print(f"   发送方式: SMTP ({self.smtp_server}:{self.smtp_port})")
+        else:
+            print(f"   发送方式: 阿里云DirectMail")
         return True
+
+    def _send_smtp(self, recipient: str, subject: str, html_body: str) -> bool:
+        """使用SMTP发送邮件"""
+        try:
+            msg = MIMEMultipart('alternative')
+            msg['From'] = self.sender_email
+            msg['To'] = recipient
+            msg['Subject'] = subject
+
+            html_part = MIMEText(html_body, 'html', 'utf-8')
+            msg.attach(html_part)
+
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.sender_email, self.smtp_password)
+                server.sendmail(self.sender_email, recipient, msg.as_string())
+
+            return True
+        except Exception as e:
+            print(f"❌ SMTP发送失败: {e}")
+            return False
 
     def send_email_report(self, html_content: str, subject: str = None) -> bool:
         """
@@ -555,10 +607,6 @@ class EmailSender:
         Returns:
             是否发送成功
         """
-        if not self.client:
-            print("❌ 阿里云邮件客户端未初始化，请检查 .env 文件")
-            return False
-
         if not self.sender_email:
             print("❌ 未配置发件人，请检查 email_config.yaml")
             return False
@@ -569,15 +617,22 @@ class EmailSender:
 
         # 使用默认主题
         if not subject:
-            from datetime import datetime
-            subject = f"Alpha158 选股报告 ({datetime.now().strftime('%Y-%m-%d')})"
+            subject = f"Research Report ({datetime.now().strftime('%Y-%m-%d')})"
 
         # 发送给每个收件人
         success_count = 0
         for recipient in self.recipients:
             try:
-                if self._send_to_recipient(recipient, subject, html_content):
-                    success_count += 1
+                # 优先使用SMTP
+                if self.use_smtp:
+                    if self._send_smtp(recipient, subject, html_content):
+                        success_count += 1
+                elif self.client:
+                    if self._send_to_recipient(recipient, subject, html_content):
+                        success_count += 1
+                else:
+                    print("❌ 没有可用的邮件发送方式")
+                    return False
             except Exception as e:
                 print(f"❌ 发送到 {recipient} 失败: {e}")
 
@@ -587,3 +642,44 @@ class EmailSender:
         else:
             print(f"❌ 所有邮件发送失败")
             return False
+
+    def send_topic_digest(self, html_content: str, date_str: str = None) -> bool:
+        """
+        发送主题摘要邮件（用于新的主题报告格式）
+
+        Args:
+            html_content: HTML邮件内容（主题报告）
+            date_str: 日期字符串
+
+        Returns:
+            是否发送成功
+        """
+        if not date_str:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        subject = f"AI Research Digest ({date_str})"
+        return self.send_email_report(html_content, subject)
+
+    def save_html_report(self, html_content: str, topic: str = "report") -> str:
+        """
+        保存HTML报告到文件
+
+        Args:
+            html_content: HTML内容
+            topic: 主题名称（用于文件名）
+
+        Returns:
+            保存的文件路径
+        """
+        os.makedirs('data', exist_ok=True)
+        safe_topic = topic.replace(' ', '_').replace('/', '_').replace('\\', '_').replace(':', '_')
+        html_filename = f"data/topic_{safe_topic}_{datetime.now().strftime('%Y-%m-%d')}.html"
+
+        try:
+            with open(html_filename, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            print(f"💾 报告已保存到: {html_filename}")
+            return html_filename
+        except Exception as e:
+            print(f"⚠️  保存HTML文件失败: {e}")
+            return ""

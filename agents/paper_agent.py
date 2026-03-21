@@ -22,11 +22,16 @@ from prompts.paper_prompts import (
     get_decision_making_prompt,
     get_summarization_prompt,
     get_topic_generation_prompt,
-    get_topic_refinement_prompt
+    get_topic_refinement_prompt,
+    get_keyword_generation_prompt,
+    get_keyword_refinement_prompt,
+    get_keyword_discovery_prompt
 )
 from utils.candidate_pool import CandidatePool
 from utils.deduplication import DeduplicationManager
 from utils.email_sender import EmailSender
+from utils.paper_keyword_config import PaperKeywordConfig, KeywordRotation
+from agents.paper_agent_keyword_filter import filter_keywords, is_excluded_paper
 
 
 class PaperSearchAgent(BaseBrowserAgent):
@@ -86,7 +91,41 @@ class PaperSearchAgent(BaseBrowserAgent):
         self.query_history = []
         self.topic = ""
         self.proxy = proxy
-    
+
+        # 关键词配置
+        self.keyword_config = PaperKeywordConfig()
+        self.keyword_rotation = None
+        self.current_keywords = []
+        self.llm_generated_keywords = []
+
+    def initialize_keyword_rotation(self):
+        """初始化关键词轮换"""
+        # 使用关键词池（种子词 + 发现的词）
+        self.current_keywords = self.keyword_config.get_keyword_pool()
+
+        keywords_per_day = self.keyword_config.get_keywords_per_day()
+        self.keyword_rotation = KeywordRotation(self.current_keywords, keywords_per_day)
+
+    async def call_llm(self, prompt: str, temperature: float = 0.7) -> str:
+        """
+        调用 LLM 的便捷方法
+
+        Args:
+            prompt: 提示词
+            temperature: 温度参数
+
+        Returns:
+            LLM 响应内容
+
+        Raises:
+            Exception: LLM 调用失败时抛出异常
+        """
+        messages = [{"role": "user", "content": prompt}]
+        result = await self.llm_client.call(messages, temperature=temperature)
+        if result["success"]:
+            return result["content"]
+        raise Exception(f"LLM call failed: {result.get('error', 'Unknown error')}")
+
     def get_date_range(self) -> tuple:
         """获取日期范围"""
         end_date = datetime.now()
@@ -220,23 +259,31 @@ class PaperSearchAgent(BaseBrowserAgent):
     async def summarize_paper(self, paper: Dict[str, Any]) -> Dict[str, Any]:
         """
         使用 LLM 总结论文
-        
+
         Args:
             paper: 论文信息
-            
+
         Returns:
             总结信息字典
         """
         prompt = get_summarization_prompt(paper)
-        
+
         messages = [
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请生成该论文的总结"}
         ]
-        
-        result = await self.llm_client.call(messages, temperature=0.5)
-        
-        if result["success"]:
+
+        # 重试机制
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            result = await self.llm_client.call(messages, temperature=0.5, max_tokens=2500)
+
+            if not result["success"]:
+                if attempt < max_retries:
+                    await asyncio.sleep(1)
+                    continue
+                return self._get_fallback_summary(paper)
+
             content = result["content"]
             try:
                 # 提取 JSON
@@ -244,23 +291,239 @@ class PaperSearchAgent(BaseBrowserAgent):
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
                     content = content.split("```")[1].split("```")[0].strip()
-                
-                return json.loads(content)
+
+                summary_data = json.loads(content)
+
+                # 验证必要字段
+                if not summary_data.get("summary"):
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.5)
+                        continue
+                    return self._get_fallback_summary(paper, content)
+
+                return summary_data
+
             except json.JSONDecodeError:
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5)
+                    continue
+                return self._get_fallback_summary(paper, content)
+
+        return self._get_fallback_summary(paper)
+
+    def _get_fallback_summary(self, paper: Dict[str, Any], raw_content: str = None) -> Dict[str, Any]:
+        """
+        生成降级总结（当 LLM 失败时使用）
+
+        Args:
+            paper: 论文信息
+            raw_content: LLM 原始响应内容
+
+        Returns:
+            降级总结字典
+        """
+        abstract = paper.get('abstract', '')
+        title = paper.get('title', 'Unknown')
+
+        # 如果有原始内容，尝试提取有用信息
+        if raw_content and len(raw_content) > 50:
+            # 尝试从非 JSON 响应中提取总结
+            clean_content = re.sub(r'```.*?```', '', raw_content, flags=re.DOTALL)
+            clean_content = clean_content.strip()
+            if len(clean_content) > 30:
                 return {
-                    "summary": content[:200],
+                    "summary": clean_content[:300],
                     "key_methods": [],
                     "innovations": [],
                     "applications": []
                 }
-        else:
+
+        # 完全降级：使用摘要作为总结
+        if abstract:
             return {
-                "summary": "总结生成失败",
+                "summary": f"[摘要] {abstract[:300]}{'...' if len(abstract) > 300 else ''}",
                 "key_methods": [],
                 "innovations": [],
                 "applications": []
             }
-    
+
+        # 最低降级
+        return {
+            "summary": f"论文标题：{title}",
+            "key_methods": [],
+            "innovations": [],
+            "applications": []
+        }
+
+    async def generate_keywords_with_llm(self, recent_papers: list = None) -> List[str]:
+        """
+        使用 LLM 生成搜索关键词
+
+        Args:
+            recent_papers: 近期已发送的论文列表（用于避免重复）
+
+        Returns:
+            生成的关键词列表
+        """
+        print("\n🤖 正在使用 LLM 生成搜索关键词...")
+
+        # 获取历史关键词（处理可能的 dict 格式）
+        history_keywords = []
+        for kw in self.current_keywords:
+            if isinstance(kw, dict):
+                # 如果是 dict 格式，提取 keywords 字段
+                history_keywords.extend(kw.get('keywords', []))
+            elif isinstance(kw, str):
+                history_keywords.append(kw)
+
+        # 构建上下文
+        context = {
+            "user_interests": self.keyword_config.get_user_interests(),
+            "num_keywords": self.keyword_config.get_num_keywords(),
+            "keywords_per_topic": self.keyword_config.get_keywords_per_topic(),
+            "history_keywords": history_keywords,
+            "recent_papers": recent_papers or []
+        }
+
+        prompt = get_keyword_generation_prompt(context)
+
+        try:
+            response = await self.call_llm(prompt)
+
+            # 解析 JSON 响应
+            import json
+            try:
+                result = json.loads(response)
+                keywords = []
+
+                for item in result.get("keywords", []):
+                    # 每个主题的关键词
+                    topic_keywords = item.get("keywords", [])
+                    keywords.extend(topic_keywords)
+
+                print(f"✅ LLM 生成了 {len(keywords)} 个关键词")
+
+                # 保存到配置
+                self.keyword_config.update_keywords_from_llm(keywords)
+                self.llm_generated_keywords = keywords
+                self.current_keywords = keywords
+
+                return keywords
+
+            except json.JSONDecodeError as e:
+                print(f"⚠️  关键词解析失败: {e}")
+                # 降级使用默认关键词
+                return self.keyword_config.get_keywords()
+
+        except Exception as e:
+            print(f"⚠️  LLM 关键词生成失败: {e}")
+            return self.keyword_config.get_keywords()
+
+    def _flatten_keywords(self, keywords: List) -> List[str]:
+        """
+        将关键词列表展平为字符串列表
+
+        Args:
+            keywords: 可能包含 dict 或 str 的列表
+
+        Returns:
+            展平后的字符串列表
+        """
+        result = []
+        for kw in keywords:
+            if isinstance(kw, dict):
+                result.extend(kw.get('keywords', []))
+            elif isinstance(kw, str):
+                result.append(kw)
+        return result
+
+    def get_today_keywords(self) -> List[str]:
+        """
+        获取今天应该使用的关键词
+
+        Returns:
+            关键词列表
+        """
+        if not self.keyword_rotation:
+            self.initialize_keyword_rotation()
+
+        keywords = self.keyword_rotation.get_keywords_for_today() if self.keyword_config.is_rotation_enabled() else self.current_keywords
+        return self._flatten_keywords(keywords)
+
+    def get_all_keywords(self) -> List[str]:
+        """
+        获取所有关键词（用于完整搜索）
+
+        Returns:
+            关键词列表
+        """
+        if not self.current_keywords:
+            self.initialize_keyword_rotation()
+
+        return self._flatten_keywords(self.current_keywords)
+
+    async def discover_keywords_from_results(self, current_keyword: str, papers: List[Dict]) -> List[str]:
+        """
+        从搜索结果中发现新关键词
+
+        Args:
+            current_keyword: 当前搜索的关键词
+            papers: 搜索到的论文列表
+
+        Returns:
+            发现的关键词列表
+        """
+        if not papers:
+            return []
+
+        print(f"\n🔍 正在从 '{current_keyword}' 搜索结果中发现新关键词...")
+
+        # 获取已有的关键词池
+        existing_keywords = self.keyword_config.get_keyword_pool()
+
+        # 构建上下文
+        context = {
+            "current_keyword": current_keyword,
+            "papers": papers,
+            "existing_keywords": existing_keywords
+        }
+
+        prompt = get_keyword_discovery_prompt(context)
+
+        try:
+            response = await self.call_llm(prompt)
+
+            # 解析 JSON 响应
+            import json
+            try:
+                result = json.loads(response)
+                discovered = result.get("discovered_keywords", [])
+
+                # P1 优化：关键词质量过滤
+                discovered = filter_keywords(discovered)
+
+                if discovered:
+                    print(f"✅ 从 '{current_keyword}' 发现了 {len(discovered)} 个新关键词")
+                    # 添加到配置池
+                    self.keyword_config.add_discovered_keywords(discovered)
+                    # 更新当前关键词池
+                    self.current_keywords = self.keyword_config.get_keyword_pool()
+                    # 重新初始化轮换
+                    self.keyword_rotation = KeywordRotation(
+                        self.current_keywords,
+                        self.keyword_config.get_keywords_per_day()
+                    )
+
+                return discovered
+
+            except json.JSONDecodeError as e:
+                print(f"⚠️  关键词发现解析失败: {e}")
+                return []
+
+        except Exception as e:
+            print(f"⚠️  关键词发现失败: {e}")
+            return []
+
     def clean_html(self, html: str, source: str = "Google Scholar") -> str:
         """
         清理 HTML，只保留主要内容，去掉边框、banner、广告等
@@ -465,7 +728,7 @@ class PaperSearchAgent(BaseBrowserAgent):
     def _extract_from_arxiv(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
         """从 arXiv 提取论文信息"""
         papers = []
-        
+
         # 尝试多个可能的选择器
         results = soup.select('.arxiv-result')
         if not results:
@@ -474,38 +737,73 @@ class PaperSearchAgent(BaseBrowserAgent):
             results = soup.select('ol.breathe-horizontal li')
         if not results:
             results = soup.select('li[class*="arxiv"]')
-        
+
         print(f"   🐛 arXiv 选择器找到 {len(results)} 个结果元素")
-        
+
         for result in results[:10]:
             try:
                 title_elem = result.select_one('.title')
                 title = title_elem.get_text(strip=True) if title_elem else ""
-                
+
                 authors_elem = result.select_one('.authors')
                 authors_text = authors_elem.get_text(strip=True) if authors_elem else ""
                 authors = [a.strip() for a in authors_text.replace('Authors:', '').split(',')[:5]]
-                
+
                 # 提取提交日期（arXiv 通常显示 "Submitted 4 Jan 2024"）
                 published_date = ''
                 date_elem = result.select_one('.is-size-7')
                 if date_elem:
                     date_text = date_elem.get_text(strip=True)
-                    year_match = re.search(r'\b(20\d{2})\b', date_text)
-                    if year_match:
-                        published_date = year_match.group(1)
-                        # 尝试提取完整日期
-                        full_date_match = re.search(r'(\d{1,2}\s+\w+\s+20\d{2})', date_text)
-                        if full_date_match:
-                            published_date = full_date_match.group(1)
-                
+                    # 尝试提取完整日期 "Submitted 4 Jan 2026" 或 "Submitted 10 February 2026"
+                    full_date_match = re.search(r'(\d{1,2})\s+(\w+)\s+(20\d{2})', date_text)
+                    if full_date_match:
+                        day = int(full_date_match.group(1))
+                        month_str = full_date_match.group(2)
+                        year = int(full_date_match.group(3))
+                        # 月份英文转数字
+                        month_map = {
+                            'jan': 1, 'january': 1,
+                            'feb': 2, 'february': 2,
+                            'mar': 3, 'march': 3,
+                            'apr': 4, 'april': 4,
+                            'may': 5,
+                            'jun': 6, 'june': 6,
+                            'jul': 7, 'july': 7,
+                            'aug': 8, 'august': 8,
+                            'sep': 9, 'september': 9,
+                            'oct': 10, 'october': 10,
+                            'nov': 11, 'november': 11,
+                            'dec': 12, 'december': 12
+                        }
+                        month = month_map.get(month_str.lower(), 1)
+                        published_date = f"{year}-{month:02d}-{day:02d}"
+                    else:
+                        # 只找到年份
+                        year_match = re.search(r'\b(20\d{2})\b', date_text)
+                        if year_match:
+                            published_date = f"{year_match.group(1)}-01-01"
+
+                # 如果仍未找到日期，尝试从 arXiv ID 推断
+                if not published_date:
+                    link_elem = result.select_one('a[href*="/abs/"]')
+                    if link_elem:
+                        href = link_elem.get('href', '')
+                        # arXiv ID 格式：arXiv:2601.12345 (26=2026 年，01=1 月)
+                        arxiv_id_match = re.search(r'arxiv:(\d{2})(\d{2})\.', href, re.IGNORECASE)
+                        if arxiv_id_match:
+                            year = int(arxiv_id_match.group(1))
+                            month = int(arxiv_id_match.group(2))
+                            if 20 <= year <= 99:
+                                full_year = 2000 + year
+                                published_date = f"{full_year}-{month:02d}-01"
+
                 abstract_elem = result.select_one('.abstract-full')
                 abstract = abstract_elem.get_text(strip=True) if abstract_elem else ""
-                
+
                 link_elem = result.select_one('a[href*="/abs/"]')
                 url = f"https://arxiv.org{link_elem.get('href', '')}" if link_elem else ""
                 pdf_url = url.replace('/abs/', '/pdf/') + '.pdf' if url else ""
-                
+
                 if title:
                     papers.append({
                         'title': title,
@@ -522,7 +820,7 @@ class PaperSearchAgent(BaseBrowserAgent):
                     })
             except Exception as e:
                 continue
-        
+
         return papers
     
     def _extract_from_semantic_scholar(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
@@ -592,6 +890,10 @@ class PaperSearchAgent(BaseBrowserAgent):
         try:
             if action_type == "add_to_pool":
                 paper = context.get("current_paper", {})
+                # 检查是否属于排除的应用领域
+                if is_excluded_paper(paper):
+                    print(f"⏭️  排除应用类论文: {paper.get('title', 'N/A')[:50]}...")
+                    return {"success": False, "error": "排除（应用类: 医疗/临床领域）"}
                 if self.candidate_pool.add_paper(paper):
                     print(f"✅ 已加入候选池: {paper.get('title', 'N/A')[:60]}...")
                     return {"success": True, "action_taken": "add_to_pool"}
@@ -806,12 +1108,17 @@ class PaperSearchAgent(BaseBrowserAgent):
                         
                         # Allow "need_more_info" if score is high enough to ensure we collect papers
                         if (decision_type == "add_to_pool" or decision_type == "need_more_info") and score >= self.candidate_pool.min_quality_score:
+                            # 检查是否属于排除的应用领域（医疗、临床等）
+                            if is_excluded_paper(paper):
+                                print(f"   ⏭️  排除（应用类论文: 医疗/临床领域）")
+                                continue
+
                             paper['importance_score'] = score
                             paper['reason'] = decision.get('reason', '')
                             paper['strengths'] = decision.get('strengths', [])
                             paper['relevance'] = decision.get('relevance', '中')
                             paper['query_used'] = query_plan.get('query')
-                            
+
                             if self.candidate_pool.add_paper(paper):
                                 print(f"   ✅ 已加入候选池")
                                 relevant_count += 1

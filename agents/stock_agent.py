@@ -52,6 +52,43 @@ CANDIDATE_STOCKS = [
     "CVNA", "HTHT", "JD", "BILI", "PDD"
 ]
 
+# 股票名称映射
+STOCK_NAMES = {
+    # 科技巨头
+    'AAPL': {'cn': '苹果', 'en': 'Apple Inc.'},
+    'MSFT': {'cn': '微软', 'en': 'Microsoft'},
+    'NVDA': {'cn': '英伟达', 'en': 'NVIDIA'},
+    'GOOGL': {'cn': '谷歌', 'en': 'Alphabet/Google'},
+    'AMZN': {'cn': '亚马逊', 'en': 'Amazon'},
+    'META': {'cn': '脸书', 'en': 'Meta Platforms'},
+    'TSLA': {'cn': '特斯拉', 'en': 'Tesla'},
+
+    # 流媒体
+    'NFLX': {'cn': '奈飞', 'en': 'Netflix'},
+
+    # 中概股 - 电商
+    'BABA': {'cn': '阿里巴巴', 'en': 'Alibaba'},
+    'JD': {'cn': '京东', 'en': 'JD.com'},
+    'PDD': {'cn': '拼多多', 'en': 'PDD Holdings'},
+
+    # 中概股 - 互联网
+    'TCEHY': {'cn': '腾讯', 'en': 'Tencent'},
+    'BILI': {'cn': '哔哩哔哩', 'en': 'Bilibili'},
+
+    # 中概股 - 新能源车
+    'NIO': {'cn': '蔚来', 'en': 'NIO Inc.'},
+    'XPEV': {'cn': '小鹏', 'en': 'XPeng'},
+    'LI': {'cn': '理想', 'en': 'Li Auto'},
+    'BYDDY': {'cn': '比亚迪', 'en': 'BYD'},
+
+    # 其他
+    'ASML': {'cn': '阿斯麦', 'en': 'ASML'},
+    'PLTR': {'cn': '帕兰泰尔', 'en': 'Palantir'},
+    'LKNCY': {'cn': '瑞幸咖啡', 'en': 'Luckin Coffee'},
+    'CVNA': {'cn': '卡尔瓦纳', 'en': 'Carvana'},
+    'HTHT': {'cn': '华住', 'en': 'H World Group'},
+}
+
 # 股票基本面数据
 SECTOR_MAP = {
     # 科技巨头
@@ -62,7 +99,7 @@ SECTOR_MAP = {
     'AMZN': {'sector': 'Consumer Discretionary', 'industry': 'E-Commerce', 'pe': 78.5, 'growth_rate': 18.5},
     'META': {'sector': 'Technology', 'industry': 'Social Media', 'pe': 28.9, 'growth_rate': 16.2},
     'TSLA': {'sector': 'Consumer Discretionary', 'industry': 'Electric Vehicles', 'pe': 65.2, 'growth_rate': 22.5},
-    
+
     # 中概股
     'BABA': {'sector': 'Technology', 'industry': 'E-Commerce (China)', 'pe': 18.5, 'growth_rate': 12.5},
     'TCEHY': {'sector': 'Technology', 'industry': 'Gaming (China)', 'pe': 22.5, 'growth_rate': 15.2},
@@ -73,7 +110,7 @@ SECTOR_MAP = {
     'XPEV': {'sector': 'Consumer Discretionary', 'industry': 'EV (China)', 'pe': None, 'growth_rate': 22.5},
     'LI': {'sector': 'Consumer Discretionary', 'industry': 'EV (China)', 'pe': None, 'growth_rate': 20.5},
     'BYDDY': {'sector': 'Consumer Discretionary', 'industry': 'EV (China)', 'pe': None, 'growth_rate': 18.5},
-    
+
     # 其他
     'NFLX': {'sector': 'Communication Services', 'industry': 'Streaming', 'pe': 42.5, 'growth_rate': 16.5},
     'ASML': {'sector': 'Technology', 'industry': 'Semiconductor Equipment', 'pe': 55.5, 'growth_rate': 28.5},
@@ -790,102 +827,270 @@ class StockAnalysisAgent:
         return '观望'
     
     def format_result_html(self, results: List[Dict]) -> str:
-        """格式化 HTML 报告"""
-        
+        """格式化 HTML 报告 - 移动端优化版"""
+
         # 标准化 recommendation
         for r in results:
             pred = r.get('prediction', {})
             if 'recommendation' in pred:
                 r['prediction']['recommendation'] = self._normalize_recommendation(pred['recommendation'])
-        
+
         buy = [r for r in results if r.get('prediction', {}).get('recommendation') == '买入']
         hold = [r for r in results if r.get('prediction', {}).get('recommendation') == '持有']
         sell = [r for r in results if r.get('prediction', {}).get('recommendation') == '卖出']
-        
-        def stock_row(r, color):
+
+        def get_stock_name(symbol):
+            """获取股票名称"""
+            info = STOCK_NAMES.get(symbol, {})
+            return info.get('cn', '') or info.get('en', symbol)
+
+        def stock_card(r, bg_color, border_color):
+            """生成股票卡片 - 移动端友好"""
             data = r.get('stock_data', {})
             pred = r.get('prediction', {})
+            symbol = r['symbol']
+            name = get_stock_name(symbol)
+            price = data.get('current_price', 'N/A')
+            mom_1m = data.get('momentum', {}).get('1m', 0)
+            mom_3m = data.get('momentum', {}).get('3m', 0)
+            pred_ret = pred.get('predicted_return', 0)
+            confidence = pred.get('confidence', 'medium')
+            factors = data.get('key_factors', [])[:3]
+
             return f"""
-            <tr style="background: {color};">
-                <td><strong>{r['symbol']}</strong></td>
-                <td>${data.get('current_price', 'N/A')}</td>
-                <td>{data.get('valuation', {}).get('sector', 'N/A')}</td>
-                <td>{data.get('momentum', {}).get('1m', 0):+.1f}%</td>
-                <td>{data.get('momentum', {}).get('3m', 0):+.1f}%</td>
-                <td>{data.get('volatility', {}).get('annual', 0):.0f}%</td>
-                <td>{data.get('valuation', {}).get('pe', 'N/A')}</td>
-                <td>{pred.get('predicted_return', 'N/A') or 'N/A':+.1f}%</td>
-                <td>{pred.get('confidence', 'N/A')}</td>
-                <td><strong>{pred.get('recommendation', 'N/A')}</strong></td>
-            </tr>
+            <div class="stock-card" style="background:{bg_color};border-left:4px solid {border_color};">
+                <div class="card-header">
+                    <div class="symbol-name">
+                        <span class="symbol">{symbol}</span>
+                        <span class="name">{name}</span>
+                    </div>
+                    <div class="price">${price}</div>
+                </div>
+                <div class="card-body">
+                    <div class="metrics">
+                        <div class="metric">
+                            <span class="label">1月</span>
+                            <span class="value {'positive' if mom_1m > 0 else 'negative'}">{mom_1m:+.1f}%</span>
+                        </div>
+                        <div class="metric">
+                            <span class="label">3月</span>
+                            <span class="value {'positive' if mom_3m > 0 else 'negative'}">{mom_3m:+.1f}%</span>
+                        </div>
+                        <div class="metric">
+                            <span class="label">预测</span>
+                            <span class="value {'positive' if pred_ret > 0 else 'negative'}">{pred_ret:+.1f}%</span>
+                        </div>
+                    </div>
+                    <div class="factors">{', '.join(factors)}</div>
+                    <div class="footer">
+                        <span class="confidence">置信: {confidence}</span>
+                    </div>
+                </div>
+            </div>
             """
-        
-        buy_html = '\n'.join([stock_row(r, '#d4edda') for r in buy]) if buy else '<tr><td colspan="10">无</td></tr>'
-        hold_html = '\n'.join([stock_row(r, '#fff3cd') for r in hold]) if hold else '<tr><td colspan="10">无</td></tr>'
-        sell_html = '\n'.join([stock_row(r, '#f8d7da') for r in sell]) if sell else '<tr><td colspan="10">无</td></tr>'
-        
+
+        buy_html = '\n'.join([stock_card(r, '#d4edda', '#28a745') for r in buy]) if buy else '<p class="empty">暂无</p>'
+        hold_html = '\n'.join([stock_card(r, '#fff3cd', '#ffc107') for r in hold]) if hold else '<p class="empty">暂无</p>'
+        sell_html = '\n'.join([stock_card(r, '#f8d7da', '#dc3545') for r in sell]) if sell else '<p class="empty">暂无</p>'
+
+        # 因子评分汇总 - 移动端卡片式
+        summary_cards = []
+        for r in sorted(results, key=lambda x: x.get('stock_data', {}).get('composite_score', 0), reverse=True):
+            data = r.get('stock_data', {})
+            symbol = r['symbol']
+            name = get_stock_name(symbol)
+            score = data.get('composite_score', 0)
+            price = data.get('current_price', 'N/A')
+            mom_1m = data.get('momentum', {}).get('1m', 0)
+            trend = data.get('trend', {}).get('signal', 'N/A')
+            factors = data.get('key_factors', [])
+
+            score_color = '#28a745' if score >= 2 else ('#dc3545' if score <= -2 else '#ffc107')
+            summary_cards.append(f"""
+            <div class="summary-card">
+                <div class="header">
+                    <span class="symbol">{symbol}</span>
+                    <span class="name">{name}</span>
+                    <span class="score" style="background:{score_color}">{score:+d}</span>
+                </div>
+                <div class="info">
+                    <span class="price">${price}</span>
+                    <span class="trend">{trend}</span>
+                    <span class="momentum {'positive' if mom_1m > 0 else 'negative'}">{mom_1m:+.1f}%</span>
+                </div>
+                <div class="factors">{', '.join(factors[:3])}</div>
+            </div>
+            """)
+
         html = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>美股多因子持仓分析</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>美股多因子分析</title>
     <style>
-        body {{ font-family: Arial, margin: 20px; background: #f5f5f5; }}
-        .container {{ max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; }}
-        h1 {{ color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }}
-        h2 {{ color: #555; margin-top: 30px; }}
-        .summary {{ display: flex; gap: 15px; margin: 20px 0; flex-wrap: wrap; }}
-        .stat {{ background: #007bff; color: white; padding: 15px 25px; border-radius: 8px; text-align: center; }}
-        .stat .num {{ font-size: 28px; font-weight: bold; }}
-        .stat .label {{ font-size: 12px; opacity: 0.9; }}
-        table {{ width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 13px; }}
-        th {{ background: #333; color: white; padding: 10px; }}
-        td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
-        .positive {{ color: #28a745; }}
-        .negative {{ color: #dc3545; }}
-        .disclaimer {{ margin-top: 40px; padding: 15px; background: #ffeeba; border-radius: 8px; font-size: 12px; }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5;
+            padding: 10px;
+            font-size: 14px;
+            line-height: 1.5;
+        }}
+        .container {{ max-width: 100%; }}
+        h1 {{
+            font-size: 18px;
+            color: #1a1a1a;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+        }}
+        .date {{ color: #666; font-size: 12px; margin-bottom: 15px; }}
+        .summary {{
+            display: flex;
+            gap: 8px;
+            margin-bottom: 15px;
+        }}
+        .stat {{
+            flex: 1;
+            background: #007bff;
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .stat .num {{ font-size: 20px; font-weight: bold; }}
+        .stat .label {{ font-size: 11px; opacity: 0.9; }}
+
+        h2 {{
+            font-size: 15px;
+            color: #333;
+            margin: 15px 0 10px;
+            padding-left: 8px;
+            border-left: 3px solid #007bff;
+        }}
+
+        .stock-card {{
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            padding: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        .card-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }}
+        .symbol-name {{ display: flex; flex-direction: column; }}
+        .symbol {{ font-size: 16px; font-weight: bold; color: #1a1a1a; }}
+        .name {{ font-size: 12px; color: #666; }}
+        .price {{
+            font-size: 18px;
+            font-weight: bold;
+            color: #007bff;
+        }}
+        .card-body {{ border-top: 1px solid #eee; padding-top: 8px; }}
+        .metrics {{
+            display: flex;
+            gap: 15px;
+            margin-bottom: 8px;
+        }}
+        .metric {{
+            display: flex;
+            flex-direction: column;
+        }}
+        .metric .label {{ font-size: 11px; color: #888; }}
+        .metric .value {{ font-size: 14px; font-weight: 500; }}
+        .factors {{ font-size: 11px; color: #666; margin-bottom: 6px; }}
+        .footer {{ font-size: 11px; color: #888; }}
+        .confidence {{
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }}
+
+        .positive {{ color: #28a745 !important; }}
+        .negative {{ color: #dc3545 !important; }}
+
+        .empty {{
+            text-align: center;
+            color: #999;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+        }}
+
+        .summary-card {{
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            padding: 10px 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        .summary-card .header {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }}
+        .summary-card .symbol {{ font-weight: bold; font-size: 15px; }}
+        .summary-card .name {{ font-size: 12px; color: #666; flex: 1; }}
+        .summary-card .score {{
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }}
+        .summary-card .info {{
+            display: flex;
+            gap: 12px;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }}
+        .summary-card .price {{ color: #007bff; font-weight: 500; }}
+        .summary-card .trend {{ color: #666; }}
+        .summary-card .factors {{ font-size: 11px; color: #888; }}
+
+        .disclaimer {{
+            margin-top: 20px;
+            padding: 10px;
+            background: #fff3cd;
+            border-radius: 8px;
+            font-size: 11px;
+            color: #856404;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📈 美股多因子持仓分析报告</h1>
-        <p><strong>报告日期:</strong> {datetime.now().strftime('%Y-%m-%d')}</p>
-        <p><strong>分析维度:</strong> 动量 + 波动率 + 趋势 + 技术指标 + 估值 + 成交量</p>
-        
+        <h1>📈 美股多因子分析</h1>
+        <p class="date">{datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+
         <div class="summary">
             <div class="stat"><div class="num">{len(results)}</div><div class="label">分析</div></div>
             <div class="stat" style="background:#28a745;"><div class="num">{len(buy)}</div><div class="label">买入</div></div>
             <div class="stat" style="background:#ffc107;color:#333;"><div class="num">{len(hold)}</div><div class="label">持有</div></div>
             <div class="stat" style="background:#dc3545;"><div class="num">{len(sell)}</div><div class="label">卖出</div></div>
         </div>
-        
+
         <h2>🟢 买入推荐 ({len(buy)})</h2>
-        <table>
-            <tr><th>代码</th><th>价格</th><th>行业</th><th>1M</th><th>3M</th><th>波动</th><th>PE</th><th>预测</th><th>置信</th><th>操作</th></tr>
-            {buy_html}
-        </table>
-        
+        {buy_html}
+
         <h2>🟡 持有/观望 ({len(hold)})</h2>
-        <table>
-            <tr><th>代码</th><th>价格</th><th>行业</th><th>1M</th><th>3M</th><th>波动</th><th>PE</th><th>预测</th><th>置信</th><th>操作</th></tr>
-            {hold_html}
-        </table>
-        
+        {hold_html}
+
         <h2>🔴 卖出/减仓 ({len(sell)})</h2>
-        <table>
-            <tr><th>代码</th><th>价格</th><th>行业</th><th>1M</th><th>3M</th><th>波动</th><th>PE</th><th>预测</th><th>置信</th><th>操作</th></tr>
-            {sell_html}
-        </table>
-        
-        <h2>📊 因子评分汇总</h2>
-        <table>
-            <tr><th>代码</th><th>价格</th><th>综合评分</th><th>动量</th><th>趋势</th><th>估值</th><th>关键因子</th></tr>
-            {''.join([f"<tr><td><strong>{r['symbol']}</strong></td><td>${r.get('stock_data', {}).get('current_price', 'N/A')}</td><td>{r.get('stock_data', {}).get('composite_score', 0):+d}</td><td class='{'positive' if r.get('stock_data', {}).get('momentum', {}).get('1m', 0) > 0 else 'negative'}>{r.get('stock_data', {}).get('momentum', {}).get('1m', 0):+.1f}%</td><td>{r.get('stock_data', {}).get('trend', {}).get('signal', 'N/A')}</td><td class='{'positive' if r.get('stock_data', {}).get('valuation', {}).get('pe_ratio', 1) < 1 else ('negative' if r.get('stock_data', {}).get('valuation', {}).get('pe_ratio', 1) > 1.2 else '')}>{r.get('stock_data', {}).get('valuation', {}).get('pe_ratio', 1):.1f}x</td><td>{', '.join(r.get('stock_data', {}).get('key_factors', [])[:4])}</td></tr>" for r in results])}
-        </table>
-        
+        {sell_html}
+
+        <h2>📊 综合评分排序</h2>
+        {''.join(summary_cards)}
+
         <div class="disclaimer">
-            <strong>免责声明:</strong> 本报告由AI生成，仅供参考，不构成投资建议。投资有风险，入市需谨慎。
+            ⚠️ 免责声明: 本报告由AI生成，仅供参考，不构成投资建议。投资有风险，入市需谨慎。
         </div>
     </div>
 </body>

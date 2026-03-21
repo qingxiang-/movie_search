@@ -2,16 +2,36 @@
 """
 学术论文搜索工具 - LLM 智能导航版
 使用 LLM 规划查询、评估论文、决策下一步操作
+支持主题聚类报告模式
 """
 
 import os
 import asyncio
-from dotenv import load_dotenv
+
+# 加载环境变量
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # 如果 dotenv 未安装，从 .env 文件手动加载
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, val = line.split('=', 1)
+                    os.environ[key.strip()] = val.strip()
+
+# 设置代理
+if 'HTTP_PROXY' not in os.environ:
+    os.environ['HTTP_PROXY'] = 'http://127.0.0.1:7890'
+    os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:7890'
 
 from agents.paper_agent import PaperSearchAgent
 
-# 加载环境变量
-load_dotenv()
+# 主题报告模式开关（可通过环境变量控制）
+TOPIC_BASED_REPORT = os.getenv("TOPIC_BASED_REPORT", "true").lower() == "true"
 
 
 async def main():
@@ -38,19 +58,51 @@ async def main():
     print("📚 学术论文搜索系统 - 8组关键词模式")
     print("="*70)
     print()
-    
-    # 8组预定义的超简短搜索关键词
-    search_keywords = [
-        "LLM agent",
-        "multimodal LLM",
-        "code generation",
-        "LLM reasoning",
-        "RLHF",
-        "RL agent",
-        "vision language",
-        "LLM training"
-    ]
-    
+
+    # 加载关键词配置
+    from utils.paper_keyword_config import PaperKeywordConfig
+    keyword_config = PaperKeywordConfig()
+
+    # 判断是否启用动态模式
+    use_dynamic_keywords = keyword_config.is_dynamic_mode()
+    use_rotation = keyword_config.is_rotation_enabled()
+
+    # 获取代理配置
+    proxy = os.getenv("HTTP_PROXY", "http://127.0.0.1:7890")
+
+    # 创建搜索 Agent（每个关键词收集12篇）
+    agent = PaperSearchAgent(
+        max_iterations=10,
+        min_papers=1,
+        max_papers=12,  # 每个关键词最多12篇
+        min_quality_score=7.0,
+        date_range_days=21,  # 3周内
+        max_retries=3,
+        proxy=proxy
+    )
+
+    # 初始化关键词轮换
+    agent.initialize_keyword_rotation()
+
+    # 获取搜索关键词
+    if use_rotation:
+        # 使用轮换模式：每天使用部分关键词
+        search_keywords = agent.get_today_keywords()
+        print("🔄 关键词轮换模式已启用")
+    else:
+        # 使用完整关键词列表
+        search_keywords = agent.get_all_keywords()
+
+    # 动态模式：基于种子词 + 搜索结果发现新关键词
+    if use_dynamic_keywords:
+        # 获取种子词作为初始搜索词
+        seed_keywords = keyword_config.get_seed_keywords()
+        print(f"🌱 使用种子关键词: {seed_keywords}")
+        # 第一次使用种子词搜索
+        if not search_keywords:
+            search_keywords = seed_keywords
+        print(f"📊 当前关键词池大小: {len(agent.get_all_keywords())}")
+
     print("🔍 搜索关键词:")
     for i, keyword in enumerate(search_keywords, 1):
         print(f"   {i}. {keyword}")
@@ -62,20 +114,6 @@ async def main():
     print("🚀 开始搜索...")
     print()
     
-    # 获取代理配置
-    proxy = os.getenv("HTTP_PROXY", "http://127.0.0.1:7890")
-    
-    # 创建搜索 Agent（每个关键词收集5篇）
-    agent = PaperSearchAgent(
-        max_iterations=10,
-        min_papers=1,
-        max_papers=5,  # 每个关键词最多5篇
-        min_quality_score=7.0,
-        date_range_days=7,
-        max_retries=3,
-        proxy=proxy
-    )
-    
     try:
         # 对每组关键词进行搜索
         all_papers = []
@@ -85,19 +123,25 @@ async def main():
             print(f"🔍 [{i}/{len(search_keywords)}] 搜索关键词: {keyword}")
             print("="*70)
             
-            # 为每个关键词重置候选池，确保独立收集 5 篇
+            # 为每个关键词重置候选池，确保独立收集 12 篇
             from utils.candidate_pool import CandidatePool
             agent.candidate_pool = CandidatePool(
                 min_papers=1,
-                max_papers=5,
+                max_papers=12,
                 min_quality_score=7.0
             )
             
             result = await agent.search_papers(topic=keyword)
-            
+
             papers = result.get('papers', [])
             print(f"✅ 找到 {len(papers)} 篇论文\n")
-            
+
+            # 动态模式：从搜索结果中发现新关键词
+            if use_dynamic_keywords and papers:
+                discovered = await agent.discover_keywords_from_results(keyword, papers)
+                if discovered:
+                    print(f"   📝 新发现关键词: {discovered}")
+
             all_papers.extend(papers)
             
             # 短暂延迟避免请求过快
@@ -154,11 +198,11 @@ async def main():
             filtered_papers = papers
             print(f"✅ 剩余 {len(filtered_papers)} 篇论文\n")
         
-        # 时间过滤：只保留 1 周内的论文（LLM 已经解析了时间）
-        print("📅 正在过滤时间（只保留 1 周内的论文）...")
+        # 时间过滤：只保留 3 周内的论文（LLM 已经解析了时间）
+        print("📅 正在过滤时间（只保留 3 周内的论文）...")
         from datetime import datetime, timedelta
-        
-        cutoff_date = datetime.now() - timedelta(days=7)
+
+        cutoff_date = datetime.now() - timedelta(days=21)
         recent_papers = []
         
         for paper in filtered_papers:
@@ -182,10 +226,10 @@ async def main():
             except:
                 continue
         
-        print(f"✅ 时间过滤完成，剩余 {len(recent_papers)} 篇最近 1 周内的论文\n")
-        
+        print(f"✅ 时间过滤完成，剩余 {len(recent_papers)} 篇最近 3 周内的论文\n")
+
         if not recent_papers:
-            print("\n⚠️  没有找到 1 周内的论文")
+            print("\n⚠️  没有找到 3 周内的论文")
             print("提示：LLM 可能未能正确解析时间，或确实没有最新论文")
             # 如果没有 1 周内的论文，使用所有论文
             print("📝 使用所有去重后的论文...")
@@ -216,28 +260,52 @@ async def main():
         
         # 1. 先保存搜索结果到文件（保存到 data 文件夹）
         os.makedirs('data', exist_ok=True)
-        
+
         start_date, end_date = agent.get_date_range()
         pool_file = f"data/paper_pool_8keywords_{end_date}.json"
-        
+
         # 将 top_papers 放回 pool 以便保存
         pool.papers = filtered_papers  # 保存所有去重后的论文
         pool.save_to_file(pool_file)
         print(f"\n💾 搜索结果已保存到: {pool_file}")
 
-        # 2. 自动发送邮件（只发送最有价值的前10篇）
-        email_topic = "AI/LLM 最新研究精选"
+        # 2. 发送报告
         date_range_str = f"{start_date} ~ {end_date}"
 
-        success = agent.email_sender.send_email(
-            top_papers,
-            email_topic,
-            date_range_str
-        )
+        if TOPIC_BASED_REPORT:
+            # 使用主题聚类报告模式
+            print("\n📊 使用主题聚类报告模式...")
+            from utils.topic_report_generator import TopicReportGenerator
+            from core.llm_client import LLMClient
 
-        if success:
-            # 更新已发送记录（只记录发送的10篇）
-            agent.dedup_manager.add_sent_papers(top_papers, email_topic)
+            llm_client = LLMClient()
+            report_generator = TopicReportGenerator(llm_client, agent.email_sender)
+
+            # 生成主题报告
+            report = await report_generator.generate_report(top_papers, end_date)
+
+            # 保存报告
+            report_generator.save_report(report)
+
+            # 发送邮件
+            success = await report_generator.send_report_email(report)
+
+            if success:
+                # 更新已发送记录
+                email_topic = "AI Research Digest"
+                agent.dedup_manager.add_sent_papers(top_papers, email_topic)
+        else:
+            # 使用传统论文列表报告模式
+            email_topic = "AI/LLM 最新研究精选"
+            success = agent.email_sender.send_email(
+                top_papers,
+                email_topic,
+                date_range_str
+            )
+
+            if success:
+                # 更新已发送记录（只记录发送的10篇）
+                agent.dedup_manager.add_sent_papers(top_papers, email_topic)
         
         print("\n" + "="*70)
         print("🎉 搜索完成!")
