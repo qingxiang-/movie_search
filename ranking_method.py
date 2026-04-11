@@ -42,10 +42,16 @@ OUTPUT_DIR = SCRIPT_DIR  # Output files saved to script directory
 sys.path.insert(0, str(SCRIPT_DIR))
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+def configure_logging(log_level):
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"无效的日志级别: {log_level}")
+
+    logging.basicConfig(
+        level=numeric_level,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
 logger = logging.getLogger(__name__)
 
 # ============================================
@@ -394,14 +400,20 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
 
 
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
-    """获取历史数据（带缓存）"""
-    # Check cache first
-    cache_path = _get_cache_path(ticker, period1, period2)
-    if _is_cache_valid(cache_path):
-        cached_df = _load_from_cache(cache_path)
-        if cached_df is not None:
+    """获取历史数据（使用智能缓存和增量更新）"""
+    from utils.data_cache import stock_cache
+
+    # 尝试从智能缓存中获取数据
+    cache_key = f"history:{ticker}:{period1}:{period2}"
+    cached_df = stock_cache.get_quote(ticker)  # 首先尝试获取最新数据
+
+    if cached_df is not None:
+        logger.debug(f"{ticker}: 从缓存获取数据")
+        # 检查数据是否覆盖了整个时间范围
+        if (cached_df.index.max() >= pd.to_datetime(period2, unit='s')) and (cached_df.index.min() <= pd.to_datetime(period1, unit='s')):
             return cached_df
 
+    logger.debug(f"{ticker}: 从 Yahoo Finance 获取数据")
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
     params = {
         'period1': period1,
@@ -434,8 +446,8 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
 
         df = df.dropna()
 
-        # Save to cache
-        _save_to_cache(df, cache_path)
+        # 保存到智能缓存
+        stock_cache.set_quote(ticker, df)
 
         return df
     except requests.exceptions.Timeout:
@@ -453,51 +465,62 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
 
 def calculate_factors(df: pd.DataFrame) -> dict:
     """计算因子 - 使用并行计算加速"""
-    # Try lite version first (no pandas_ta dependency), fallback to full version
+    # Try enhanced version first (with additional factors), fallback to full or lite version
     try:
-        from alpha158_lite import Alpha158
+        from alpha158_enhanced import Alpha158Enhanced
+        logger.debug("使用增强版因子库")
+        alpha = Alpha158Enhanced(df)
+        # 计算所有因子，包括增强因子
+        all_factors = alpha.compute_all_factors()
     except ImportError:
-        from alpha158 import Alpha158
+        try:
+            from alpha158 import Alpha158
+            logger.debug("使用完整因子库")
+            alpha = Alpha158(df)
+            # Parallelize batch computations
+            def compute_batch(batch_name):
+                try:
+                    batch_func = getattr(alpha, batch_name)
+                    return batch_func()
+                except Exception:
+                    return {}
+            batch_names = ['compute_batch1', 'compute_batch2', 'compute_batch3',
+                           'compute_batch4', 'compute_batch5']
+            # Use ThreadPoolExecutor for parallel batch computation
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                batch_results = list(executor.map(compute_batch, batch_names))
+            all_factors = {}
+            for batch_result in batch_results:
+                all_factors.update(batch_result)
+        except ImportError:
+            from alpha158_lite import Alpha158
+            logger.debug("使用轻量级因子库")
+            alpha = Alpha158(df)
+            # Parallelize batch computations
+            def compute_batch(batch_name):
+                try:
+                    batch_func = getattr(alpha, batch_name)
+                    return batch_func()
+                except Exception:
+                    return {}
+            batch_names = ['compute_batch1', 'compute_batch2', 'compute_batch3',
+                           'compute_batch4', 'compute_batch5']
+            # Use ThreadPoolExecutor for parallel batch computation
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                batch_results = list(executor.map(compute_batch, batch_names))
+            all_factors = {}
+            for batch_result in batch_results:
+                all_factors.update(batch_result)
 
-    try:
-        alpha = Alpha158(df)
+    # 处理因子数据提取
+    factors = {}
+    for name, series in all_factors.items():
+        if hasattr(series, 'iloc') and len(series) > 0:
+            val = series.iloc[-1]
+            if pd.notna(val) and np.isfinite(val):
+                factors[name.lower()] = float(val)
 
-        # Parallelize batch computations
-        def compute_batch(batch_name):
-            try:
-                batch_func = getattr(alpha, batch_name)
-                return batch_func()
-            except Exception:
-                return {}
-
-        batch_names = ['compute_batch1', 'compute_batch2', 'compute_batch3',
-                       'compute_batch4', 'compute_batch5']
-
-        # Use ThreadPoolExecutor for parallel batch computation
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            batch_results = list(executor.map(compute_batch, batch_names))
-
-        all_factors = {}
-        for batch_result in batch_results:
-            all_factors.update(batch_result)
-
-        factors = {}
-        for name, series in all_factors.items():
-            if hasattr(series, 'iloc') and len(series) > 0:
-                val = series.iloc[-1]
-                if pd.notna(val) and np.isfinite(val):
-                    factors[name.lower()] = float(val)
-
-        return factors
-    except ImportError as e:
-        logger.error(f"Alpha158 import error: {e}")
-        return {}
-    except AttributeError as e:
-        logger.error(f"Alpha158 attribute error: {e}")
-        return {}
-    except Exception as e:
-        logger.debug(f"Factor calculation error: {e}")
-        return {}
+    return factors
 
 def get_momentum(row, default=0):
     """获取 6 月动量值，支持多种命名方式 (momentum_120d, momentum_6m, momentum_60d)"""
@@ -817,7 +840,8 @@ def _print_factor_importance(factor_weights: dict, top_n: int = 20):
     """Print top N important factors."""
     logger.info(f"\n📈 Top {top_n} 重要因子:")
     imp = pd.Series(factor_weights)
-    imp = imp.sort_values(key=abs, ascending=False)
+    # 对 pandas < 1.1.0 版本兼容的排序方法
+    imp = imp.reindex(imp.abs().sort_values(ascending=False).index)
     for i, (factor, weight) in enumerate(imp.head(top_n).items()):
         direction = "↑" if weight > 0 else "↓"
         logger.info(f"   {i+1:2d}. {factor:<30} {direction}{abs(weight):.3f}")
@@ -973,6 +997,7 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
             api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
             model = os.getenv("DASHSCOPE_MODEL", "qwen3.5-plus")
 
+            logger.debug(f"使用 DASHSCOPE_API_KEY: {api_key[:5]}...")
             if not api_key:
                 return "⚠️ 未设置 DASHSCOPE_API_KEY"
 
@@ -1483,6 +1508,308 @@ def _send_enhanced_email(html: str, top_stocks_analysis: list):
         logger.error(traceback.format_exc())
 
 
+def _analyze_top_stocks_with_mcp(top_stocks: list, df_result: pd.DataFrame) -> list:
+    """Use MCP (Model Context Protocol) to analyze and summarize top stocks with alpha factors."""
+    logger.info(f"   使用 MCP (Model Context Protocol) 获取分析")
+
+    results = []
+    for ticker in top_stocks:
+        row = df_result.loc[ticker]
+        mom = get_momentum(row)
+        sharpe = row.get('sharpe_ratio_20d', 0)
+        vol = row.get('volatility_20d', 0)
+        score = row.get('score', 0)
+
+        # 提取该股票的 alpha 因子
+        alpha_factors = {k: v for k, v in row.items() if k not in ['score']}
+
+        # Get analysis using MCP with alpha factors
+        analysis = _get_top_stock_news_mcp(ticker, alpha_factors)
+
+        results.append({
+            'ticker': ticker,
+            'score': score,
+            'momentum_120d': mom,
+            'sharpe': sharpe,
+            'volatility': vol,
+            'alpha_factors': alpha_factors,
+            'analysis': analysis
+        })
+        logger.info(f"   ✅ {ticker}: 分析完成")
+
+    return results
+
+
+def _get_top_stock_news_mcp(ticker: str, alpha_factors: Dict = None) -> str:
+    """
+    使用 MCP (Model Context Protocol) 客户端获取和分析股票新闻
+    提供更智能的搜索和分析功能
+    """
+    try:
+        from core.mcp_client import get_mcp_client
+        import asyncio
+
+        logger.debug(f"使用 MCP 分析 {ticker} 新闻")
+
+        # 获取 MCP 客户端
+        client = get_mcp_client()
+
+        # ============ 1. 使用 MCP 智能搜索 ============
+        news_content = ""
+
+        async def search_news():
+            """使用 MCP 搜索新闻"""
+            return await client.search(f"{ticker} stock news", limit=5)
+
+        search_result = asyncio.run(search_news())
+        logger.debug(f"MCP 搜索结果: {search_result}")
+
+        if search_result.get('success', False):
+            news_items = search_result.get('data', [])
+            if news_items:
+                news_lines = []
+                for i, item in enumerate(news_items, 1):
+                    title = item.get('title', 'N/A')
+                    description = item.get('description', 'N/A')
+                    source = item.get('source', 'N/A')
+                    news_lines.append(f"{i}. [{source}] {title}")
+                    if description:
+                        news_lines.append(f"   {description}")
+                news_content = "\n".join(news_lines)
+            else:
+                news_content = f"未找到 {ticker} 的最近新闻"
+        else:
+            logger.warning(f"MCP 搜索失败: {search_result.get('error', '未知错误')}")
+            logger.info(f"降级到传统方法获取 {ticker} 分析")
+            # 调用传统方法前先检查参数
+            logger.debug(f"调用 _get_top_stock_news 参数: ticker={ticker}, api_key={None}, use_azure={True}, alpha_factors={len(alpha_factors) if alpha_factors else 0} 个因子")
+            try:
+                result = _get_top_stock_news(ticker, None, True, alpha_factors)
+                logger.debug(f"传统方法返回: {result[:100]}...")  # 只输出前 100 个字符
+                return result
+            except Exception as e:
+                logger.error(f"传统方法调用失败: {e}")
+                import traceback
+                logger.error(f"错误堆栈: {traceback.format_exc()}")
+                return f"无法获取 {ticker} 分析（传统方法调用失败）"
+
+        # ============ 2. 构建因子分析信息 ============
+        factor_info = ""
+        if alpha_factors:
+            factor_lines = []
+            for key, val in alpha_factors.items():
+                if isinstance(val, (int, float)) and val == val:  # not NaN
+                    factor_lines.append(f"   - {key}: {val:.4f}" if abs(val) < 1000 else f"   - {key}: {val:.2f}")
+            if factor_lines:
+                factor_info = "\n\nAlpha 因子数据:\n" + "\n".join(factor_lines[:15])  # 限制最多 15 个因子
+
+        # ============ 3. 构建分析 Prompt ============
+        if news_content:
+            prompt = f"""作为资深量化分析师，请对 {ticker} 股票进行深度分析。
+
+## 最新新闻
+
+{news_content}
+
+## Alpha 因子数据
+{factor_info}
+
+请结合以上新闻和因子数据进行深度分析：
+
+1. **新闻解读**（30%）
+   - 从新闻中提取关键信息（财报、产品、并购、监管等）
+   - 评估新闻对股价的潜在影响
+
+2. **因子解读**（30%）
+   - 从因子数据看，该股票的技术面特征（动量、波动率、趋势等）
+   - 新闻与因子信号是否一致
+
+3. **基本面分析**（20%）
+   - 基于估值因子的合理性分析
+   - 行业对比和竞争地位
+
+4. **投资建议**（20%）
+   - 明确的操作建议（买入/持有/卖出）
+   - 目标价位和止损位
+   - 关键催化剂和风险因素
+
+要求：
+- 分析要具体，避免套话
+- 基于真实新闻和因子数据，不要编造
+- 结论要有可操作性
+
+限制在 500 字以内。"""
+        else:
+            # 没有新闻时，仅基于因子分析
+            prompt = f"""作为资深量化分析师，请对 {ticker} 股票进行深度分析。
+
+## Alpha 因子数据
+{factor_info}
+
+请结合以上因子数据和你的专业知识进行分析：
+
+1. **因子解读**（40%）
+   - 从因子数据看，该股票的技术面特征（动量、波动率、趋势等）
+
+2. **基本面分析**（30%）
+   - 基于你对 {ticker} 的了解，总结其基本面和近期动态
+   - 基于估值因子的合理性分析
+
+3. **投资建议**（30%）
+   - 明确的操作建议（买入/持有/卖出）
+   - 目标价位和止损位
+   - 关键催化剂和风险因素
+
+要求：
+- 分析要具体，避免套话
+- 基于因子数据给出量化角度的解读
+- 结论要有可操作性
+
+限制在 400 字以内。"""
+
+        # ============ 4. 使用 MCP 进行智能分析 ============
+        async def analyze_news():
+            """使用 MCP 分析新闻"""
+            return await client.analyze(prompt, "stock_analysis")
+
+        analysis_result = asyncio.run(analyze_news())
+
+        if analysis_result.get('success', False):
+            logger.debug(f"MCP 分析成功")
+            return analysis_result.get('data', f"无法获取 {ticker} 分析（无内容）")
+        else:
+            error = analysis_result.get('error', '未知错误')
+            logger.warning(f"MCP 分析失败: {error}")
+            return _get_top_stock_news(ticker, None, False, alpha_factors)  # 降级到传统方法
+
+    except ImportError as e:
+        logger.warning(f"MCP 客户端未安装: {e}")
+        return _get_top_stock_news(ticker, None, False, alpha_factors)  # 降级到传统方法
+    except Exception as e:
+        logger.warning(f"MCP 分析异常: {e}")
+        return _get_top_stock_news(ticker, None, False, alpha_factors)  # 降级到传统方法
+
+
+# 更新 run_analysis 函数以支持 MCP
+def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_trading_days: bool = True, use_mcp: bool = False):
+    """
+    运行分析
+
+    Args:
+        stock_pool: 股票池列表
+        period_days: 时间周期（天数）
+        use_trading_days: 如果为 True，period_days 被视为交易日，自动转换为日历日
+        use_mcp: 如果为 True，使用 MCP (Model Context Protocol) 进行新闻分析
+    """
+    logger.info("\n" + "="*80)
+    logger.info("🚀 Alpha158 多因子选股系统\n" + "="*80)
+    logger.info("="*80)
+    logger.info(f"候选池：{len(stock_pool)} 只股票")
+    if use_mcp:
+        logger.info(f"分析模式：MCP (Model Context Protocol)")
+    else:
+        logger.info(f"分析模式：传统 API 方法")
+
+    # Convert trading days to calendar days if needed
+    if use_trading_days:
+        calendar_days = _trading_days_to_calendar_days(period_days)
+        logger.info(f"时间周期：{period_days} 交易日 ≈ {calendar_days} 日历日")
+    else:
+        calendar_days = period_days
+        logger.info(f"时间周期：{period_days} 日历日")
+
+    period2 = int(datetime.now().timestamp())
+    period1 = int((datetime.now() - timedelta(days=calendar_days)).timestamp())
+
+    logger.info(f"\n📥 获取数据 ({calendar_days}天)...")
+    all_factors = _fetch_all_stock_factors(stock_pool, period1, period2)
+
+    if not all_factors:
+        logger.error("\n❌ 无有效数据")
+        return None
+
+    logger.info(f"\n✅ 成功获取 {len(all_factors)}/{len(stock_pool)} 只股票数据")
+
+    # 构建 DataFrame
+    df_factors = pd.DataFrame(all_factors).T
+
+    # 计算因子权重
+    factor_weights = _calculate_factor_weights(df_factors)
+
+    # 记录因子统计
+    _log_factor_statistics(factor_weights, len(df_factors.columns))
+
+    # 计算得分并排名
+    df_result = _calculate_scores_and_rank(df_factors, factor_weights)
+
+    # 输出 TOP 20
+    _print_top_stocks(df_result, 20)
+
+    # 因子重要性分析
+    _print_factor_importance(factor_weights, 20)
+
+    # 保存结果
+    top20 = df_result.head(20).index.tolist()
+
+    if use_mcp:
+        # 使用 MCP 进行新闻分析
+        logger.info("\n📰 正在获取 TOP 5 股票新闻 (MCP)...")
+        top5_stocks = top20[:5]
+        top_stocks_analysis = _analyze_top_stocks_with_mcp(top5_stocks, df_result)
+
+        # 生成增强版 HTML 报告（包含新闻）
+        _save_results_with_news(df_result, top20, top_stocks_analysis)
+    else:
+        # 加载环境变量并获取 API Key
+        from dotenv import load_dotenv
+        load_dotenv()
+        qwen_api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if qwen_api_key:
+            logger.info("\n📰 正在获取 TOP 5 股票新闻 (API)...")
+            top5_stocks = top20[:5]
+            top_stocks_analysis = _analyze_top_stocks_with_llm(top5_stocks, df_result, qwen_api_key)
+
+            # 生成增强版 HTML 报告（包含新闻）
+            _save_results_with_news(df_result, top20, top_stocks_analysis)
+        else:
+            logger.warning("\n⚠️  未设置 DASHSCOPE_API_KEY，跳过新闻获取")
+            _save_results(df_result, top20)
+
+    return df_result
+
+
 if __name__ == "__main__":
-    df_result = run_analysis()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Alpha158 多因子选股系统")
+    parser.add_argument("--use-mcp", action="store_true", help="使用 MCP (Model Context Protocol) 进行新闻分析")
+    parser.add_argument("--stock-pool", type=str, help="股票池文件路径（CSV 格式）")
+    parser.add_argument("--period-days", type=int, default=252, help="时间周期（天数）")
+    parser.add_argument("--use-trading-days", action="store_true", help="将 period-days 视为交易日而非日历日")
+    parser.add_argument("--log-level", type=str, default="INFO", help="日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
+
+    args = parser.parse_args()
+
+    # 配置日志
+    configure_logging(args.log_level)
+
+    # 处理股票池
+    stock_pool = TECH_100
+    if args.stock_pool:
+        try:
+            import pandas as pd
+            df_pool = pd.read_csv(args.stock_pool)
+            stock_pool = df_pool['ticker'].tolist() if 'ticker' in df_pool.columns else df_pool.iloc[:, 0].tolist()
+            logger.info(f"从文件加载股票池：{len(stock_pool)} 只股票")
+        except Exception as e:
+            logger.error(f"股票池文件加载失败：{e}")
+            logger.info("使用默认股票池")
+
+    # 运行分析
+    df_result = run_analysis(
+        stock_pool=stock_pool,
+        period_days=args.period_days,
+        use_trading_days=args.use_trading_days,
+        use_mcp=args.use_mcp
+    )
 

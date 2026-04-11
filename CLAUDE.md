@@ -129,8 +129,16 @@ python ranking_method.py --use-mcp --period-days 60 --stock-pool my_stock_pool.c
 ### 1. 安装依赖
 
 ```bash
-# 安装Python依赖
+# 方法一：使用pip安装（推荐）
 pip install -r requirements.txt
+
+# 方法二：使用conda安装（推荐使用conda-forge频道）
+conda install -c conda-forge pandas pandas-ta scikit-learn xgboost
+conda install -c conda-forge playwright  # 如需要使用浏览器自动化功能
+
+# 搜索包（检查可用版本）
+conda search pandas  # 搜索pandas包的可用版本
+conda search -c conda-forge pandas-ta  # 从conda-forge频道搜索pandas-ta
 
 # 安装Playwright浏览器
 python -m playwright install chromium
