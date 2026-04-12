@@ -42,6 +42,15 @@ OUTPUT_DIR = SCRIPT_DIR  # Output files saved to script directory
 sys.path.insert(0, str(SCRIPT_DIR))
 
 # Configure logging
+# Import LLM factor integration if available
+try:
+    from core.llm_factor_integration import get_llm_factors_sync
+    LLM_FACTOR_AVAILABLE = True
+except ImportError:
+    LLM_FACTOR_AVAILABLE = False
+    get_llm_factors_sync = None
+
+# Configure logging
 def configure_logging(log_level):
     numeric_level = getattr(logging, log_level.upper(), None)
     if not isinstance(numeric_level, int):
@@ -76,7 +85,8 @@ TECH_100 = [
     'ADP', 'PAYX', 'WEX', 'GPN', 'FIS', 'FISV', 'CME', 'MCO',
     'SPGI', 'NTRS', 'MSCI', 'BLK', 'AXP', 'V', 'MA',
     'TMUS', 'VZ', 'NOK', 'CSCO', 'ERIC', 'CMCSA',
-    'UPST', 'SOFI', 'PYPL', 'AFRM',
+    'INTC', 'MU', 'SMH', 'XOM', 'CVX', 'MARA', 'RIOT',
+    'UPST', 'SOFI', 'PYPL', 'AFRM', 'COIN',
 ]
 
 # 股票名称映射（中文优先）
@@ -293,6 +303,12 @@ FACTOR_TYPES = [
     ('volatility_regime', 0, 0.01),  # 中性
     ('volatility_breakout', 1, 0.03),  # 正向
     ('mean_reversion_signal', 1, 0.02),  # 正向
+
+    # LLM-derived factors (higher weight because LLM provides unique insight)
+    ('llm_predicted_return', 1, 2.0),  # 正向: 更高预期回报 = 更好
+    ('llm_confidence', 1, 0.5),  # 正向: 更高信心 = 更好
+    ('llm_risk_score', 1, 1.0),  # 正向: 风险分数已经编码为负权重 = 低风险更好
+    ('llm_buy_signal', 1, 1.5),  # 正向: 买入信号更好
 ]
 
 # Build O(1) lookup dict for factor weights (prefix -> direction * weight)
@@ -1268,6 +1284,15 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
                 font-size: 13px;
                 line-height: 1.6;
             }}
+            .recommendation-box {{
+                background: #d4edda;
+                border: 1px solid #c3e6cb;
+                border-radius: 4px;
+                padding: 8px 12px;
+                margin-bottom: 10px;
+                color: #155724;
+                font-weight: 500;
+            }}
             .footer {{
                 margin-top: 20px;
                 padding: 10px;
@@ -1340,6 +1365,65 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
         price = prices.get(ticker, 'N/A')
         price_str = f"${price:.2f}" if isinstance(price, (int, float)) else price
 
+        # Extract operation recommendation from analysis text
+        import re
+        recommendation_text = '暂无'
+        lines = analysis.splitlines()
+        found = False
+
+        # Strategy 1: Look for "操作建议: ..." anywhere in text
+        matches = re.search(r'(操作建议|投资建议)[:：]\s*(.+?)(?=\n\s*###|$)', analysis, re.DOTALL)
+        if matches:
+            candidate = matches.group(2).strip()
+            if candidate and not candidate.startswith('###') and len(candidate) > 2:
+                recommendation_text = candidate
+                found = True
+
+        # Strategy 2: Line by line search
+        if not found:
+            for i, line in enumerate(lines):
+                if '操作建议' in line or '投资建议' in line:
+                    # Check if the recommendation is on this line after the label
+                    matches = re.search(r'(操作建议|投资建议)[:：]\s*(.+)', line)
+                    if matches and matches.group(2).strip():
+                        candidate = matches.group(2).strip()
+                        if not candidate.startswith('###'):
+                            recommendation_text = candidate
+                            found = True
+                            break
+                    # If not on this line, check next 1-2 lines
+                    for j in range(i+1, min(i+3, len(lines))):
+                        candidate = lines[j].strip()
+                        if candidate and not candidate.startswith('###'):
+                            recommendation_text = candidate
+                            found = True
+                            break
+                if found:
+                    break
+
+        # Strategy 3: Look for heading like "### 投资建议" and get next line
+        if not found:
+            for i, line in enumerate(lines):
+                if '###' in line and ('投资建议' in line or '操作建议' in line):
+                    for j in range(i+1, min(i+3, len(lines))):
+                        candidate = lines[j].strip()
+                        if candidate:
+                            # Remove any bullet points or extra markers
+                            candidate = re.sub(r'^[*-]\s*', '', candidate)
+                            recommendation_text = candidate
+                            found = True
+                            break
+                if found:
+                    break
+
+        # Fallback: just get any line containing the action keywords
+        if not found:
+            for line in lines:
+                if any(keyword in line for keyword in ['买入', '持有', '卖出']):
+                    recommendation_text = line.strip()
+                    found = True
+                    break
+
         html += f"""
         <div class="analysis-card">
             <div class="analysis-title">
@@ -1366,6 +1450,10 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
             </div>
             <div class="analysis-content">
                 <strong>🤖 LLM 分析：</strong><br>
+                <div class="recommendation-box">
+                    <strong>💡 操作建议：</strong> {recommendation_text}
+                </div>
+                <hr>
                 {analysis.replace(chr(10), '<br>')}
             </div>
         </div>
@@ -1383,7 +1471,7 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
     return html
 
 
-def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_trading_days: bool = True):
+def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_trading_days: bool = True, use_llm_factor: bool = False, enable_archive: bool = True):
     """
     运行分析
 
@@ -1391,6 +1479,8 @@ def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_tradin
         stock_pool: 股票池列表
         period_days: 时间周期（天数）
         use_trading_days: 如果为 True，period_days 被视为交易日，自动转换为日历日
+        use_llm_factor: 如果为 True，启用 LLM 预测因子集成（将 LLM 预测作为额外因子加入排名）
+        enable_archive: 如果为 True，将推荐结果存档用于历史表现跟踪
     """
     logger.info("\n" + "="*80)
     logger.info("🚀 Alpha158 多因子选股系统\n" + "="*80)
@@ -1405,6 +1495,13 @@ def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_tradin
         calendar_days = period_days
         logger.info(f"时间周期：{period_days} 日历日")
 
+    if use_llm_factor:
+        if not LLM_FACTOR_AVAILABLE:
+            logger.warning("⚠️  LLM 因子模块不可用，将跳过 LLM 因子集成")
+            use_llm_factor = False
+        else:
+            logger.info("✅ LLM 因子集成已启用 - LLM 预测将作为额外因子参与排名")
+
     period2 = int(datetime.now().timestamp())
     period1 = int((datetime.now() - timedelta(days=calendar_days)).timestamp())
 
@@ -1416,6 +1513,23 @@ def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_tradin
         return None
 
     logger.info(f"\n✅ 成功获取 {len(all_factors)}/{len(stock_pool)} 只股票数据")
+
+    # Integrate LLM factors if enabled
+    if use_llm_factor and LLM_FACTOR_AVAILABLE and get_llm_factors_sync is not None:
+        symbols = list(all_factors.keys())
+        logger.info(f"\n🤖 获取 LLM 预测因子（{len(symbols)} 只股票）...")
+        try:
+            llm_factors_dict = get_llm_factors_sync(symbols)
+            if llm_factors_dict:
+                # Merge LLM factors into all_factors
+                for symbol, llm_factors in llm_factors_dict.items():
+                    if symbol in all_factors:
+                        all_factors[symbol].update(llm_factors)
+                logger.info(f"✅ 成功集成 {len(llm_factors_dict)} 个 LLM 因子")
+            else:
+                logger.warning("⚠️  未获取到任何 LLM 因子，将跳过 LLM 集成")
+        except Exception as e:
+            logger.error(f"❌ LLM 因子获取失败: {e}，将跳过 LLM 集成")
 
     # 构建 DataFrame
     df_factors = pd.DataFrame(all_factors).T
@@ -1452,6 +1566,16 @@ def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_tradin
     else:
         logger.warning("\n⚠️  未设置 DASHSCOPE_API_KEY，跳过新闻获取")
         _save_results(df_result, top20)
+
+    # Archive recommendation for performance tracking (if enabled)
+    if enable_archive:
+        try:
+            from utils.performance_tracker import performance_tracker
+            archive_path = performance_tracker.archive_recommendation(df_result, top_n=20, llm_factors_used=use_llm_factor)
+            if archive_path:
+                logger.info(f"\n💾 推荐已存档用于历史表现跟踪: {archive_path}")
+        except Exception as e:
+            logger.warning(f"\n⚠️  推荐存档失败: {e}")
 
     return df_result
 
@@ -1506,78 +1630,6 @@ def _send_enhanced_email(html: str, top_stocks_analysis: list):
         logger.error(traceback.format_exc())
 
 
-def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_trading_days: bool = True):
-    """
-    运行分析
-
-    Args:
-        stock_pool: 股票池列表
-        period_days: 时间周期（天数）
-        use_trading_days: 如果为 True，period_days 被视为交易日，自动转换为日历日
-    """
-    logger.info("\n" + "="*80)
-    logger.info("🚀 Alpha158 多因子选股系统\n" + "="*80)
-    logger.info("="*80)
-    logger.info(f"候选池：{len(stock_pool)} 只股票")
-    logger.info(f"分析模式：传统 API 方法")
-
-    # Convert trading days to calendar days if needed
-    if use_trading_days:
-        calendar_days = _trading_days_to_calendar_days(period_days)
-        logger.info(f"时间周期：{period_days} 交易日 ≈ {calendar_days} 日历日")
-    else:
-        calendar_days = period_days
-        logger.info(f"时间周期：{period_days} 日历日")
-
-    period2 = int(datetime.now().timestamp())
-    period1 = int((datetime.now() - timedelta(days=calendar_days)).timestamp())
-
-    logger.info(f"\n📥 获取数据 ({calendar_days}天)...")
-    all_factors = _fetch_all_stock_factors(stock_pool, period1, period2)
-
-    if not all_factors:
-        logger.error("\n❌ 无有效数据")
-        return None
-
-    logger.info(f"\n✅ 成功获取 {len(all_factors)}/{len(stock_pool)} 只股票数据")
-
-    # 构建 DataFrame
-    df_factors = pd.DataFrame(all_factors).T
-
-    # 计算因子权重
-    factor_weights = _calculate_factor_weights(df_factors)
-
-    # 记录因子统计
-    _log_factor_statistics(factor_weights, len(df_factors.columns))
-
-    # 计算得分并排名
-    df_result = _calculate_scores_and_rank(df_factors, factor_weights)
-
-    # 输出 TOP 20
-    _print_top_stocks(df_result, 20)
-
-    # 因子重要性分析
-    _print_factor_importance(factor_weights, 20)
-
-    # 保存结果
-    top20 = df_result.head(20).index.tolist()
-
-    # 加载环境变量并获取 API Key
-    from dotenv import load_dotenv
-    load_dotenv()
-    qwen_api_key = os.getenv("DASHSCOPE_API_KEY", "")
-    if qwen_api_key:
-        logger.info("\n📰 正在获取 TOP 5 股票新闻 (API)...")
-        top5_stocks = top20[:5]
-        top_stocks_analysis = _analyze_top_stocks_with_llm(top5_stocks, df_result, qwen_api_key)
-
-        # 生成增强版 HTML 报告（包含新闻）
-        _save_results_with_news(df_result, top20, top_stocks_analysis)
-    else:
-        logger.warning("\n⚠️  未设置 DASHSCOPE_API_KEY，跳过新闻获取")
-        _save_results(df_result, top20)
-
-    return df_result
 
 
 if __name__ == "__main__":
@@ -1587,6 +1639,14 @@ if __name__ == "__main__":
     parser.add_argument("--stock-pool", type=str, help="股票池文件路径（CSV 格式）")
     parser.add_argument("--period-days", type=int, default=252, help="时间周期（天数）")
     parser.add_argument("--use-trading-days", action="store_true", help="将 period-days 视为交易日而非日历日")
+    parser.add_argument("--use-llm-factor", action="store_true", help="启用 LLM 预测因子集成（将 LLM 预测作为额外因子加入排名）")
+    parser.add_argument("--no-archive", action="store_true", help="不存档推荐结果（跳过历史表现跟踪）")
+    parser.add_argument("--backtest", action="store_true", help="运行回测（walk-forward 验证）")
+    parser.add_argument("--backtest-start-year", type=int, default=2020, help="回测开始年份")
+    parser.add_argument("--backtest-end-year", type=int, default=2026, help="回测结束年份")
+    parser.add_argument("--rebalance-days", type=int, default=21, help="再平衡周期（天数）")
+    parser.add_argument("--backtest-top-n", type=int, default=10, help="每期选择 top N 只股票")
+    parser.add_argument("--transaction-cost", type=float, default=10, help="交易成本（基点，1bps=0.01%）")
     parser.add_argument("--log-level", type=str, default="INFO", help="日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
 
     args = parser.parse_args()
@@ -1606,10 +1666,41 @@ if __name__ == "__main__":
             logger.error(f"股票池文件加载失败：{e}")
             logger.info("使用默认股票池")
 
-    # 运行分析
-    df_result = run_analysis(
-        stock_pool=stock_pool,
-        period_days=args.period_days,
-        use_trading_days=args.use_trading_days
-    )
+    # Check if running backtest
+    if args.backtest:
+        # Run backtest instead of normal analysis
+        from datetime import datetime
+        from backtest_framework import BacktestFramework
+
+        start_date = datetime(args.backtest_start_year, 1, 1)
+        end_date = datetime(args.backtest_end_year, 1, 1)
+
+        logger.info(f"\n🚀 Starting walk-forward backtest from {start_date.date()} to {end_date.date()}")
+
+        backtest = BacktestFramework(
+            stock_pool=stock_pool,
+            start_date=start_date,
+            end_date=end_date,
+            rebalance_days=args.rebalance_days,
+            top_n_stocks=args.backtest_top_n,
+            transaction_cost_bps=args.transaction_cost
+        )
+
+        results = backtest.run_walk_forward()
+        backtest.save_results()
+        report_path = backtest.generate_html_report()
+
+        logger.info(f"\n✅ Backtest completed!")
+        logger.info(f"📊 Report saved to: {report_path}")
+        print(f"\n✅ Backtest completed!")
+        print(f"📊 Report saved to: {report_path}")
+    else:
+        # Run normal analysis
+        df_result = run_analysis(
+            stock_pool=stock_pool,
+            period_days=args.period_days,
+            use_trading_days=args.use_trading_days,
+            use_llm_factor=args.use_llm_factor,
+            enable_archive=not args.no_archive
+        )
 

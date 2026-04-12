@@ -5,7 +5,7 @@ Alpha158 因子库增强版 - 添加新的因子类型和优化计算方法
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 import warnings
 from alpha158 import Alpha158
 
@@ -278,7 +278,7 @@ class Alpha158Enhanced(Alpha158):
         pb = self.price_to_book()
         return (pe + ps + pb) / 3
 
-    def liquidity_factor(self) -> pd.Series:
+    def liquidity_factor(self, period: int = 10) -> pd.Series:
         """流动性因子"""
         return self.df['volume'] * self.df['close']
 
@@ -389,7 +389,18 @@ class Alpha158Enhanced(Alpha158):
         # 新增增强因子
         factors.update(self.compute_all_enhanced_factors())
 
-        return {k: v for k, v in factors.items() if v is not None and len(v) > 0}
+        # Filter out None values, for Series check if not empty
+        filtered = {}
+        for k, v in factors.items():
+            if v is None:
+                continue
+            if hasattr(v, '__len__'):
+                if len(v) > 0:
+                    filtered[k] = v
+            else:
+                # scalar value is fine, keep it
+                filtered[k] = v
+        return filtered
 
     # ==================== 因子质量评估 ====================
 
