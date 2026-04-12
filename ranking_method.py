@@ -66,7 +66,28 @@ logger = logging.getLogger(__name__)
 # ============================================
 # TOP 100+ 美股科技股候选池
 # ============================================
-TECH_100 = [
+# TOP 50 Core Tech Stocks (default candidate pool)
+# 核心50只科技股票 - 最具代表性的科技巨头和高成长龙头
+TECH_TOP_50 = [
+    # 科技巨头 (7)
+    'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA',
+    # 半导体巨头 (10)
+    'AVGO', 'AMD', 'INTC', 'QCOM', 'ASML', 'TXN', 'AMAT', 'MU', 'LRCX', 'KLAC',
+    # 半导体设备/材料/设计 (8)
+    'MRVL', 'MPWR', 'MCHP', 'ON', 'TER', 'KEYS', 'CDNS', 'SNPS',
+    # 软件/SaaS (10)
+    'ORCL', 'ADBE', 'CRM', 'NFLX', 'NOW', 'INTU', 'PLTR', 'CRWD', 'PANW', 'ZM', 'DDOG',
+    # AI/云/网络 (6)
+    'SNOW', 'MDB', 'NET', 'SMH', 'TSM', 'PYPL',
+    # 新能源/光伏 (4)
+    'FSLR', 'ENPH', 'SEDG', 'RUN',
+    # 金融科技/其他 (4)
+    'COIN', 'UPST', 'SOFI', 'DELL',
+]
+
+# FULL LIST (140+ stocks - kept but not used by default)
+# 完整名单（保留但默认不使用）
+TECH_FULL = [
     'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'GOOG', 'AMZN', 'META', 'TSLA',
     'AVGO', 'AMD', 'QCOM', 'ORCL', 'ADBE', 'CRM', 'NFLX',
     'TSM', 'ASML', 'TXN', 'AMAT', 'MU', 'LRCX', 'KLAC', 'MRVL',
@@ -85,8 +106,8 @@ TECH_100 = [
     'ADP', 'PAYX', 'WEX', 'GPN', 'FIS', 'FISV', 'CME', 'MCO',
     'SPGI', 'NTRS', 'MSCI', 'BLK', 'AXP', 'V', 'MA',
     'TMUS', 'VZ', 'NOK', 'CSCO', 'ERIC', 'CMCSA',
-    'INTC', 'MU', 'SMH', 'XOM', 'CVX', 'MARA', 'RIOT',
-    'UPST', 'SOFI', 'PYPL', 'AFRM', 'COIN',
+    'INTC', 'SMH', 'XOM', 'CVX', 'MARA', 'RIOT',
+    'UPST', 'SOFI', 'PYPL', 'AFRM',
 ]
 
 # 股票名称映射（中文优先）
@@ -1471,7 +1492,7 @@ def _generate_enhanced_html(top_stocks_analysis: list, df_result: pd.DataFrame, 
     return html
 
 
-def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_trading_days: bool = True, use_llm_factor: bool = False, enable_archive: bool = True):
+def run_analysis(stock_pool: list = TECH_TOP_50, period_days: int = 252, use_trading_days: bool = True, use_llm_factor: bool = False, enable_archive: bool = True):
     """
     运行分析
 
@@ -1655,7 +1676,7 @@ if __name__ == "__main__":
     configure_logging(args.log_level)
 
     # 处理股票池
-    stock_pool = TECH_100
+    stock_pool = TECH_TOP_50  # 默认使用TOP 50核心科技股票
     if args.stock_pool:
         try:
             import pandas as pd
