@@ -42,10 +42,16 @@ OUTPUT_DIR = SCRIPT_DIR  # Output files saved to script directory
 sys.path.insert(0, str(SCRIPT_DIR))
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+def configure_logging(log_level):
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"无效的日志级别: {log_level}")
+
+    logging.basicConfig(
+        level=numeric_level,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
 logger = logging.getLogger(__name__)
 
 # ============================================
@@ -394,14 +400,18 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
 
 
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
-    """获取历史数据（带缓存）"""
-    # Check cache first
-    cache_path = _get_cache_path(ticker, period1, period2)
-    if _is_cache_valid(cache_path):
-        cached_df = _load_from_cache(cache_path)
-        if cached_df is not None:
-            return cached_df
+    """获取历史数据（使用智能缓存和增量更新）"""
+    from utils.data_cache import stock_cache
 
+    # 尝试从智能缓存中获取历史数据
+    cache_key = f"history:{ticker}:{period1}:{period2}"
+    cached_df = stock_cache.get_history(ticker, period1=period1, period2=period2)
+
+    if cached_df is not None:
+        logger.debug(f"{ticker}: 从缓存获取历史数据")
+        return cached_df
+
+    logger.debug(f"{ticker}: 从 Yahoo Finance 获取历史数据")
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
     params = {
         'period1': period1,
@@ -434,8 +444,8 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
 
         df = df.dropna()
 
-        # Save to cache
-        _save_to_cache(df, cache_path)
+        # 保存到智能缓存
+        stock_cache.set_history(ticker, df, period1=period1, period2=period2)
 
         return df
     except requests.exceptions.Timeout:
@@ -453,51 +463,62 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
 
 def calculate_factors(df: pd.DataFrame) -> dict:
     """计算因子 - 使用并行计算加速"""
-    # Try lite version first (no pandas_ta dependency), fallback to full version
+    # Try enhanced version first (with additional factors), fallback to full or lite version
     try:
-        from alpha158_lite import Alpha158
+        from alpha158_enhanced import Alpha158Enhanced
+        logger.debug("使用增强版因子库")
+        alpha = Alpha158Enhanced(df)
+        # 计算所有因子，包括增强因子
+        all_factors = alpha.compute_all_factors()
     except ImportError:
-        from alpha158 import Alpha158
+        try:
+            from alpha158 import Alpha158
+            logger.debug("使用完整因子库")
+            alpha = Alpha158(df)
+            # Parallelize batch computations
+            def compute_batch(batch_name):
+                try:
+                    batch_func = getattr(alpha, batch_name)
+                    return batch_func()
+                except Exception:
+                    return {}
+            batch_names = ['compute_batch1', 'compute_batch2', 'compute_batch3',
+                           'compute_batch4', 'compute_batch5']
+            # Use ThreadPoolExecutor for parallel batch computation
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                batch_results = list(executor.map(compute_batch, batch_names))
+            all_factors = {}
+            for batch_result in batch_results:
+                all_factors.update(batch_result)
+        except ImportError:
+            from alpha158_lite import Alpha158
+            logger.debug("使用轻量级因子库")
+            alpha = Alpha158(df)
+            # Parallelize batch computations
+            def compute_batch(batch_name):
+                try:
+                    batch_func = getattr(alpha, batch_name)
+                    return batch_func()
+                except Exception:
+                    return {}
+            batch_names = ['compute_batch1', 'compute_batch2', 'compute_batch3',
+                           'compute_batch4', 'compute_batch5']
+            # Use ThreadPoolExecutor for parallel batch computation
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                batch_results = list(executor.map(compute_batch, batch_names))
+            all_factors = {}
+            for batch_result in batch_results:
+                all_factors.update(batch_result)
 
-    try:
-        alpha = Alpha158(df)
+    # 处理因子数据提取
+    factors = {}
+    for name, series in all_factors.items():
+        if hasattr(series, 'iloc') and len(series) > 0:
+            val = series.iloc[-1]
+            if pd.notna(val) and np.isfinite(val):
+                factors[name.lower()] = float(val)
 
-        # Parallelize batch computations
-        def compute_batch(batch_name):
-            try:
-                batch_func = getattr(alpha, batch_name)
-                return batch_func()
-            except Exception:
-                return {}
-
-        batch_names = ['compute_batch1', 'compute_batch2', 'compute_batch3',
-                       'compute_batch4', 'compute_batch5']
-
-        # Use ThreadPoolExecutor for parallel batch computation
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            batch_results = list(executor.map(compute_batch, batch_names))
-
-        all_factors = {}
-        for batch_result in batch_results:
-            all_factors.update(batch_result)
-
-        factors = {}
-        for name, series in all_factors.items():
-            if hasattr(series, 'iloc') and len(series) > 0:
-                val = series.iloc[-1]
-                if pd.notna(val) and np.isfinite(val):
-                    factors[name.lower()] = float(val)
-
-        return factors
-    except ImportError as e:
-        logger.error(f"Alpha158 import error: {e}")
-        return {}
-    except AttributeError as e:
-        logger.error(f"Alpha158 attribute error: {e}")
-        return {}
-    except Exception as e:
-        logger.debug(f"Factor calculation error: {e}")
-        return {}
+    return factors
 
 def get_momentum(row, default=0):
     """获取 6 月动量值，支持多种命名方式 (momentum_120d, momentum_6m, momentum_60d)"""
@@ -817,7 +838,8 @@ def _print_factor_importance(factor_weights: dict, top_n: int = 20):
     """Print top N important factors."""
     logger.info(f"\n📈 Top {top_n} 重要因子:")
     imp = pd.Series(factor_weights)
-    imp = imp.sort_values(key=abs, ascending=False)
+    # 对 pandas < 1.1.0 版本兼容的排序方法
+    imp = imp.reindex(imp.abs().sort_values(ascending=False).index)
     for i, (factor, weight) in enumerate(imp.head(top_n).items()):
         direction = "↑" if weight > 0 else "↓"
         logger.info(f"   {i+1:2d}. {factor:<30} {direction}{abs(weight):.3f}")
@@ -973,6 +995,7 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
             api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
             model = os.getenv("DASHSCOPE_MODEL", "qwen3.5-plus")
 
+            logger.debug(f"使用 DASHSCOPE_API_KEY: {api_key[:5]}...")
             if not api_key:
                 return "⚠️ 未设置 DASHSCOPE_API_KEY"
 
@@ -1483,6 +1506,110 @@ def _send_enhanced_email(html: str, top_stocks_analysis: list):
         logger.error(traceback.format_exc())
 
 
+def run_analysis(stock_pool: list = TECH_100, period_days: int = 252, use_trading_days: bool = True):
+    """
+    运行分析
+
+    Args:
+        stock_pool: 股票池列表
+        period_days: 时间周期（天数）
+        use_trading_days: 如果为 True，period_days 被视为交易日，自动转换为日历日
+    """
+    logger.info("\n" + "="*80)
+    logger.info("🚀 Alpha158 多因子选股系统\n" + "="*80)
+    logger.info("="*80)
+    logger.info(f"候选池：{len(stock_pool)} 只股票")
+    logger.info(f"分析模式：传统 API 方法")
+
+    # Convert trading days to calendar days if needed
+    if use_trading_days:
+        calendar_days = _trading_days_to_calendar_days(period_days)
+        logger.info(f"时间周期：{period_days} 交易日 ≈ {calendar_days} 日历日")
+    else:
+        calendar_days = period_days
+        logger.info(f"时间周期：{period_days} 日历日")
+
+    period2 = int(datetime.now().timestamp())
+    period1 = int((datetime.now() - timedelta(days=calendar_days)).timestamp())
+
+    logger.info(f"\n📥 获取数据 ({calendar_days}天)...")
+    all_factors = _fetch_all_stock_factors(stock_pool, period1, period2)
+
+    if not all_factors:
+        logger.error("\n❌ 无有效数据")
+        return None
+
+    logger.info(f"\n✅ 成功获取 {len(all_factors)}/{len(stock_pool)} 只股票数据")
+
+    # 构建 DataFrame
+    df_factors = pd.DataFrame(all_factors).T
+
+    # 计算因子权重
+    factor_weights = _calculate_factor_weights(df_factors)
+
+    # 记录因子统计
+    _log_factor_statistics(factor_weights, len(df_factors.columns))
+
+    # 计算得分并排名
+    df_result = _calculate_scores_and_rank(df_factors, factor_weights)
+
+    # 输出 TOP 20
+    _print_top_stocks(df_result, 20)
+
+    # 因子重要性分析
+    _print_factor_importance(factor_weights, 20)
+
+    # 保存结果
+    top20 = df_result.head(20).index.tolist()
+
+    # 加载环境变量并获取 API Key
+    from dotenv import load_dotenv
+    load_dotenv()
+    qwen_api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if qwen_api_key:
+        logger.info("\n📰 正在获取 TOP 5 股票新闻 (API)...")
+        top5_stocks = top20[:5]
+        top_stocks_analysis = _analyze_top_stocks_with_llm(top5_stocks, df_result, qwen_api_key)
+
+        # 生成增强版 HTML 报告（包含新闻）
+        _save_results_with_news(df_result, top20, top_stocks_analysis)
+    else:
+        logger.warning("\n⚠️  未设置 DASHSCOPE_API_KEY，跳过新闻获取")
+        _save_results(df_result, top20)
+
+    return df_result
+
+
 if __name__ == "__main__":
-    df_result = run_analysis()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Alpha158 多因子选股系统")
+    parser.add_argument("--stock-pool", type=str, help="股票池文件路径（CSV 格式）")
+    parser.add_argument("--period-days", type=int, default=252, help="时间周期（天数）")
+    parser.add_argument("--use-trading-days", action="store_true", help="将 period-days 视为交易日而非日历日")
+    parser.add_argument("--log-level", type=str, default="INFO", help="日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
+
+    args = parser.parse_args()
+
+    # 配置日志
+    configure_logging(args.log_level)
+
+    # 处理股票池
+    stock_pool = TECH_100
+    if args.stock_pool:
+        try:
+            import pandas as pd
+            df_pool = pd.read_csv(args.stock_pool)
+            stock_pool = df_pool['ticker'].tolist() if 'ticker' in df_pool.columns else df_pool.iloc[:, 0].tolist()
+            logger.info(f"从文件加载股票池：{len(stock_pool)} 只股票")
+        except Exception as e:
+            logger.error(f"股票池文件加载失败：{e}")
+            logger.info("使用默认股票池")
+
+    # 运行分析
+    df_result = run_analysis(
+        stock_pool=stock_pool,
+        period_days=args.period_days,
+        use_trading_days=args.use_trading_days
+    )
 
