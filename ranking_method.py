@@ -66,8 +66,8 @@ logger = logging.getLogger(__name__)
 # ============================================
 # TOP 100+ 美股科技股候选池
 # ============================================
-# TOP 54 Core + Chinese Internet Tech Stocks (default candidate pool)
-# 核心54只科技股票 - 美股科技巨头 + 头部中概科技互联网
+# TOP 60 Core + Chinese Internet Tech Stocks (default candidate pool)
+# 核心60只科技股票 - 美股科技巨头 + 头部中概科技互联网（市值Top 10）
 TECH_TOP_50 = [
     # 科技巨头 (7)
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA',
@@ -75,7 +75,7 @@ TECH_TOP_50 = [
     'AVGO', 'AMD', 'INTC', 'QCOM', 'ASML', 'TXN', 'AMAT', 'MU', 'LRCX', 'KLAC',
     # 半导体设备/材料/设计 (8)
     'MRVL', 'MPWR', 'MCHP', 'ON', 'TER', 'KEYS', 'CDNS', 'SNPS',
-    # 软件/SaaS (10)
+    # 软件/SaaS (11)
     'ORCL', 'ADBE', 'CRM', 'NFLX', 'NOW', 'INTU', 'PLTR', 'CRWD', 'PANW', 'ZM', 'DDOG',
     # AI/云/网络 (6)
     'SNOW', 'MDB', 'NET', 'SMH', 'TSM', 'PYPL',
@@ -83,8 +83,17 @@ TECH_TOP_50 = [
     'FSLR', 'ENPH', 'SEDG', 'RUN',
     # 金融科技/其他 (4)
     'COIN', 'UPST', 'SOFI', 'DELL',
-    # 中概科技互联网头部 (4)
-    'BABA', 'JD', 'PDD', 'TCEHY',
+    # 中概科技互联网头部 - 市值Top 10 (美股上市) (10)
+    'BABA',   # 阿里巴巴 - 电商/云计算
+    'TCEHY',  # 腾讯控股 - 社交/游戏/云 (ADR)
+    'PDD',    # 拼多多 - 电商/跨境
+    'JD',     # 京东 - 电商/物流
+    'BIDU',   # 百度 - 搜索/AI
+    'NIO',    # 蔚来 - 电动车
+    'NTES',   # 网易 - 游戏/互联网
+    'LI',     # 理想汽车 - 电动车
+    'XPEV',   # 小鹏汽车 - 电动车
+    'DIDI',   # 滴滴 - 出行
 ]
 
 # FULL LIST (140+ stocks - kept but not used by default)
@@ -1671,6 +1680,7 @@ if __name__ == "__main__":
     parser.add_argument("--backtest-top-n", type=int, default=10, help="每期选择 top N 只股票")
     parser.add_argument("--transaction-cost", type=float, default=10, help="交易成本（基点，1bps=0.01%）")
     parser.add_argument("--log-level", type=str, default="INFO", help="日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）")
+    parser.add_argument("--limit", type=int, default=None, help="只运行前 N 只股票（用于分批抓取提升成功率）")
 
     args = parser.parse_args()
 
@@ -1688,6 +1698,11 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"股票池文件加载失败：{e}")
             logger.info("使用默认股票池")
+
+    # Limit to first N stocks if requested (for batch processing to improve success rate)
+    if args.limit is not None and args.limit > 0 and args.limit < len(stock_pool):
+        logger.info(f"⚠️  限制只运行前 {args.limit}/{len(stock_pool)} 只股票（分批抓取）")
+        stock_pool = stock_pool[:args.limit]
 
     # Check if running backtest
     if args.backtest:
