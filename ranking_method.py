@@ -66,8 +66,8 @@ logger = logging.getLogger(__name__)
 # ============================================
 # TOP 100+ 美股科技股候选池
 # ============================================
-# TOP 60 Core + Chinese Internet Tech Stocks (default candidate pool)
-# 核心60只科技股票 - 美股科技巨头 + 头部中概科技互联网（市值Top 10）
+# TOP 54 Core + Chinese Internet Tech Stocks (default candidate pool)
+# 核心54只科技股票 - 美股科技巨头 + 头部中概科技互联网
 TECH_TOP_50 = [
     # 科技巨头 (7)
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA',
@@ -83,17 +83,11 @@ TECH_TOP_50 = [
     'FSLR', 'ENPH', 'SEDG', 'RUN',
     # 金融科技/其他 (4)
     'COIN', 'UPST', 'SOFI', 'DELL',
-    # 中概科技互联网头部 - 市值Top 10 (美股上市) (10)
+    # 中概科技互联网头部 (4)
     'BABA',   # 阿里巴巴 - 电商/云计算
     'TCEHY',  # 腾讯控股 - 社交/游戏/云 (ADR)
     'PDD',    # 拼多多 - 电商/跨境
     'JD',     # 京东 - 电商/物流
-    'BIDU',   # 百度 - 搜索/AI
-    'NIO',    # 蔚来 - 电动车
-    'NTES',   # 网易 - 游戏/互联网
-    'LI',     # 理想汽车 - 电动车
-    'XPEV',   # 小鹏汽车 - 电动车
-    'DIDI',   # 滴滴 - 出行
 ]
 
 # FULL LIST (140+ stocks - kept but not used by default)
