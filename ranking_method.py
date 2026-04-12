@@ -23,7 +23,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configuration constants
-MAX_WORKERS = 10  # Maximum parallel workers for API calls
+MAX_WORKERS = 5  # Maximum parallel workers for API calls (reduced to avoid Yahoo Finance rate limiting)
+MAX_RETRIES = 3  # Maximum retries for failed requests
 MIN_DATA_DAYS = 100  # Minimum days of data required for analysis
 CACHE_DIR = Path.home() / ".cache" / "ranking_method" / "stock_data"
 PROGRESS_FILE = Path.home() / ".cache" / "ranking_method" / "progress.json"
@@ -442,11 +443,12 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
 
 
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
-    """获取历史数据（使用智能缓存和增量更新）"""
+    """获取历史数据（使用智能缓存和增量更新，带重试机制）"""
+    import time
+    import random
     from utils.data_cache import stock_cache
 
     # 尝试从智能缓存中获取历史数据
-    cache_key = f"history:{ticker}:{period1}:{period2}"
     cached_df = stock_cache.get_history(ticker, period1=period1, period2=period2)
 
     if cached_df is not None:
@@ -464,44 +466,65 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
     }
     headers = {'User-Agent': 'Mozilla/5.0'}
 
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        if resp.status_code != 200:
-            logger.debug(f"{ticker}: HTTP {resp.status_code}")
-            return None
+    # Retry with exponential backoff
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Add random jitter to avoid synchronized requests
+            delay = (2 ** attempt) + random.random()
+            if attempt > 0:
+                logger.debug(f"{ticker}: 重试尝试 {attempt+1}/{MAX_RETRIES}，等待 {delay:.1f}s")
+                time.sleep(delay)
 
-        data = resp.json()
-        result = data['chart'].get('result')
-        if not result:
-            logger.debug(f"{ticker}: No chart result")
-            return None
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
 
-        df = pd.DataFrame({
-            'Open': result[0]['indicators']['quote'][0]['open'],
-            'High': result[0]['indicators']['quote'][0]['high'],
-            'Low': result[0]['indicators']['quote'][0]['low'],
-            'Close': result[0]['indicators']['quote'][0]['close'],
-            'Volume': result[0]['indicators']['quote'][0]['volume']
-        }, index=pd.to_datetime(result[0]['timestamp'], unit='s'))
+            if resp.status_code == 200:
+                data = resp.json()
+                result = data['chart'].get('result')
+                if not result:
+                    logger.debug(f"{ticker}: No chart result (attempt {attempt+1})")
+                    continue
 
-        df = df.dropna()
+                df = pd.DataFrame({
+                    'Open': result[0]['indicators']['quote'][0]['open'],
+                    'High': result[0]['indicators']['quote'][0]['high'],
+                    'Low': result[0]['indicators']['quote'][0]['low'],
+                    'Close': result[0]['indicators']['quote'][0]['close'],
+                    'Volume': result[0]['indicators']['quote'][0]['volume']
+                }, index=pd.to_datetime(result[0]['timestamp'], unit='s'))
 
-        # 保存到智能缓存
-        stock_cache.set_history(ticker, df, period1=period1, period2=period2)
+                df = df.dropna()
 
-        return df
-    except requests.exceptions.Timeout:
-        logger.debug(f"{ticker}: Request timeout")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.debug(f"{ticker}: Request error: {e}")
-        return None
-    except (KeyError, IndexError, TypeError) as e:
-        logger.debug(f"{ticker}: Parse error: {e}")
-        return None
-    except Exception as e:
-        logger.debug(f"{ticker}: Unexpected error: {e}")
-        return None
+                # 保存到智能缓存
+                stock_cache.set_history(ticker, df, period1=period1, period2=period2)
+
+                # Add a small random delay after successful request
+                time.sleep(random.uniform(0.5, 1.5))
+                return df
+            elif resp.status_code == 429:
+                # Rate limited - need to backoff longer
+                logger.debug(f"{ticker}: Rate limited (429), backing off...")
+                time.sleep(delay * 2)
+                continue
+            else:
+                logger.debug(f"{ticker}: HTTP {resp.status_code} (attempt {attempt+1})")
+                continue
+
+        except requests.exceptions.Timeout:
+            logger.debug(f"{ticker}: Request timeout (attempt {attempt+1})")
+            continue
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"{ticker}: Request error: {e} (attempt {attempt+1})")
+            continue
+        except (KeyError, IndexError, TypeError) as e:
+            logger.debug(f"{ticker}: Parse error: {e} (attempt {attempt+1})")
+            continue
+        except Exception as e:
+            logger.debug(f"{ticker}: Unexpected error: {e} (attempt {attempt+1})")
+            continue
+
+    # All retries failed
+    logger.debug(f"{ticker}: 所有 {MAX_RETRIES} 次尝试都失败了")
+    return None
 
 def calculate_factors(df: pd.DataFrame) -> dict:
     """计算因子 - 使用并行计算加速"""
