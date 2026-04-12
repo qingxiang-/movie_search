@@ -126,13 +126,19 @@ python ranking_method.py --use-mcp --period-days 60 --stock-pool my_stock_pool.c
 
 ## 环境配置
 
-### 1. 安装依赖
+### 1. 使用 conda 环境
 
 ```bash
-# 方法一：使用pip安装（推荐）
-pip install -r requirements.txt
+# 查看所有可用的 conda 环境
+conda env list
 
-# 方法二：使用conda安装（推荐使用conda-forge频道）
+# 激活 search 环境（如果尚未激活）
+conda activate search
+
+# 检查当前环境的 Python 版本
+python --version
+
+# 安装依赖包（推荐使用 conda-forge 频道）
 conda install -c conda-forge pandas pandas-ta scikit-learn xgboost
 conda install -c conda-forge playwright  # 如需要使用浏览器自动化功能
 
@@ -142,6 +148,17 @@ conda search -c conda-forge pandas-ta  # 从conda-forge频道搜索pandas-ta
 
 # 安装Playwright浏览器
 python -m playwright install chromium
+```
+
+### 2. 安装依赖（备选方法）
+
+```bash
+# 方法一：使用pip安装（推荐在 conda 环境中使用）
+pip install -r requirements.txt
+
+# 方法二：使用conda安装（推荐使用conda-forge频道）
+conda install -c conda-forge pandas pandas-ta scikit-learn xgboost
+conda install -c conda-forge playwright  # 如需要使用浏览器自动化功能
 ```
 
 ### 2. 配置环境变量

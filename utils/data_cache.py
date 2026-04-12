@@ -289,7 +289,7 @@ class StockDataCache(DataCache):
         """
         return self.set(f"quote:{ticker}", quote_data)
 
-    def get_history(self, ticker: str, period: str = "1y", interval: str = "1d") -> Optional[Dict]:
+    def get_history(self, ticker: str, period: str = "1y", interval: str = "1d", period1: str = None, period2: str = None) -> Optional[Dict]:
         """
         获取股票历史数据
 
@@ -297,13 +297,22 @@ class StockDataCache(DataCache):
             ticker: 股票代码
             period: 时间范围
             interval: 数据间隔
+            period1: 开始时间（可选）
+            period2: 结束时间（可选）
 
         Returns:
             股票历史数据
         """
-        return self.get(f"history:{ticker}:{period}:{interval}")
+        if period1 and period2:
+            # 使用时间段参数
+            cache_key = f"history:{ticker}:{period1}:{period2}:{interval}"
+        else:
+            # 使用传统参数
+            cache_key = f"history:{ticker}:{period}:{interval}"
 
-    def set_history(self, ticker: str, history_data: Dict, period: str = "1y", interval: str = "1d") -> bool:
+        return self.get(cache_key)
+
+    def set_history(self, ticker: str, history_data: Dict, period: str = "1y", interval: str = "1d", period1: str = None, period2: str = None) -> bool:
         """
         保存股票历史数据
 
@@ -312,11 +321,20 @@ class StockDataCache(DataCache):
             history_data: 股票历史数据
             period: 时间范围
             interval: 数据间隔
+            period1: 开始时间（可选）
+            period2: 结束时间（可选）
 
         Returns:
             是否成功
         """
-        return self.set(f"history:{ticker}:{period}:{interval}", history_data)
+        if period1 and period2:
+            # 使用时间段参数
+            cache_key = f"history:{ticker}:{period1}:{period2}:{interval}"
+        else:
+            # 使用传统参数
+            cache_key = f"history:{ticker}:{period}:{interval}"
+
+        return self.set(cache_key, history_data)
 
     def get_financials(self, ticker: str, statement_type: str = "income") -> Optional[Dict]:
         """
