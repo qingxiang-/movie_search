@@ -23,7 +23,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configuration constants
-MAX_WORKERS = 3  # Maximum parallel workers for API calls (reduced aggressively to avoid Yahoo Finance rate limiting)
+MAX_WORKERS = 2  # Maximum parallel workers (low to respect rate limit of ≤10 requests/minute
 MAX_RETRIES = 3  # Maximum retries for failed requests
 MIN_DATA_DAYS = 100  # Minimum days of data required for analysis
 CACHE_DIR = Path.home() / ".cache" / "ranking_method" / "stock_data"
@@ -442,11 +442,42 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
     return (ticker, None)
 
 
+# Rate limiting for yfinance - ensure <= 10 requests per minute
+_last_request_time = 0
+_request_count_this_minute = 0
+
+def _rate_limit_wait():
+    """Wait to ensure we don't exceed 10 requests per minute."""
+    import time
+    global _last_request_time, _request_count_this_minute
+    current_time = time.time()
+
+    # Reset counter if more than a minute has passed
+    if _last_request_time == 0 or current_time - _last_request_time >= 60:
+        _request_count_this_minute = 0
+        _last_request_time = current_time
+        return
+
+    # Check if we've exceeded 10 requests this minute
+    if _request_count_this_minute >= 10:
+        # Wait until the next minute
+        wait_time = 60 - (current_time - _last_request_time)
+        if wait_time > 0:
+            logger.info(f"⚠️  速率限制：已发送 {_request_count_this_minute} 请求/分钟，等待 {wait_time:.1f}s...")
+            time.sleep(wait_time)
+            _request_count_this_minute = 0
+            _last_request_time = time.time()
+    else:
+        # Add small random spacing between requests
+        time.sleep(random.uniform(3, 8))
+
+    _request_count_this_minute += 1
+    _last_request_time = current_time
+
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
-    """获取历史数据（支持Yahoo Finance + Alpha Vantage 双数据源，带智能缓存和重试指数退避）"""
+    """获取历史数据（使用yfinance，带速率限制保证≤10请求/分钟，智能缓存和重试）"""
     import time
     import random
-    import os
     from utils.data_cache import stock_cache
 
     # 尝试从智能缓存中获取历史数据
@@ -456,161 +487,52 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
         logger.debug(f"{ticker}: 从缓存获取历史数据")
         return cached_df
 
-    # Get API keys from environment
-    alpha_vantage_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+    logger.debug(f"{ticker}: 从 Yahoo Finance (yfinance) 获取历史数据")
 
-    # Try Yahoo Finance first
-    logger.debug(f"{ticker}: 从 Yahoo Finance 获取历史数据")
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-    params = {
-        'period1': period1,
-        'period2': period2,
-        'interval': '1d',
-        'includePrePost': 'false',
-        'events': 'history'
-    }
-    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    # Convert timestamps to datetime for yfinance
+    start_date = datetime.fromtimestamp(period1)
+    end_date = datetime.fromtimestamp(period2)
 
-    # Retry with exponential backoff for Yahoo Finance
+    # Retry with exponential backoff
     for attempt in range(MAX_RETRIES):
         try:
-            # Add random jitter to avoid synchronized requests
-            delay = (3 ** attempt) + random.uniform(1, 3)
-            if attempt > 0:
-                logger.debug(f"{ticker}: Yahoo Finance 重试尝试 {attempt+1}/{MAX_RETRIES}，等待 {delay:.1f}s")
-                time.sleep(delay)
+            # Enforce rate limiting before making request
+            _rate_limit_wait()
 
-            resp = requests.get(url, params=params, headers=headers, timeout=20)
+            # Use yfinance library
+            import yfinance as yf
+            ticker_obj = yf.Ticker(ticker)
+            df = ticker_obj.history(start=start_date, end=end_date, interval='1d', auto_adjust=False)
 
-            if resp.status_code == 200:
-                data = resp.json()
-                result = data['chart'].get('result')
-                if not result:
-                    logger.debug(f"{ticker}: Yahoo Finance: No chart result (attempt {attempt+1})")
-                    time.sleep(random.uniform(1, 2))
-                    continue
-
-                df = pd.DataFrame({
-                    'Open': result[0]['indicators']['quote'][0]['open'],
-                    'High': result[0]['indicators']['quote'][0]['high'],
-                    'Low': result[0]['indicators']['quote'][0]['low'],
-                    'Close': result[0]['indicators']['quote'][0]['close'],
-                    'Volume': result[0]['indicators']['quote'][0]['volume']
-                }, index=pd.to_datetime(result[0]['timestamp'], unit='s'))
-
+            if df is not None and not df.empty:
+                # yfinance returns columns with capitalization, keep same format as before
+                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
                 df = df.dropna()
 
                 if len(df) >= MIN_DATA_DAYS:
                     # 保存到智能缓存
                     stock_cache.set_history(ticker, df, period1=period1, period2=period2)
 
-                    # Add a random delay after successful request to avoid rate limiting
-                    time.sleep(random.uniform(1, 2))
-                    logger.debug(f"{ticker}: Yahoo Finance: ✓ 获取成功，{len(df)} 天数据")
+                    logger.debug(f"{ticker}: ✓ 获取成功，{len(df)} 天数据")
                     return df
                 else:
-                    logger.debug(f"{ticker}: Yahoo Finance: 数据不足 ({len(df)} 天，需要至少 {MIN_DATA_DAYS}) (attempt {attempt+1})")
+                    logger.debug(f"{ticker}: 数据不足 ({len(df)} 天，需要至少 {MIN_DATA_DAYS}) (attempt {attempt+1})")
                     continue
-
-            elif resp.status_code == 429:
-                # Rate limited - need to backoff longer
-                logger.debug(f"{ticker}: Yahoo Finance: Rate limited (429), backing off...")
-                time.sleep(delay * 3)
-                continue
             else:
-                logger.debug(f"{ticker}: Yahoo Finance: HTTP {resp.status_code} (attempt {attempt+1})")
-                time.sleep(random.uniform(2, 4))
+                logger.debug(f"{ticker}: 返回空数据 (attempt {attempt+1})")
                 continue
 
-        except requests.exceptions.Timeout:
-            logger.debug(f"{ticker}: Yahoo Finance: Request timeout (attempt {attempt+1})")
-            continue
-        except requests.exceptions.RequestException as e:
-            logger.debug(f"{ticker}: Yahoo Finance: Request error: {e} (attempt {attempt+1})")
-            continue
-        except (KeyError, IndexError, TypeError) as e:
-            logger.debug(f"{ticker}: Yahoo Finance: Parse error: {e} (attempt {attempt+1})")
-            continue
         except Exception as e:
-            logger.debug(f"{ticker}: Yahoo Finance: Unexpected error: {e} (attempt {attempt+1})")
+            logger.debug(f"{ticker}: 异常: {e} (attempt {attempt+1})")
+            # Wait before retry
+            delay = (4 ** attempt) + random.uniform(5, 10)
+            if attempt < MAX_RETRIES - 1:
+                logger.debug(f"{ticker}: 等待 {delay:.1f}s 后重试...")
+                time.sleep(delay)
             continue
 
-    # Yahoo Finance failed, try Alpha Vantage if API key is available
-    if alpha_vantage_key:
-        logger.debug(f"{ticker}: Yahoo Finance 失败，尝试 Alpha Vantage")
-        start_date = datetime.fromtimestamp(period1)
-        end_date = datetime.fromtimestamp(period2)
-
-        # Calculate output size - need 'full' or 'compact'
-        # For our purposes, we always need full data from start_date
-        url = f"https://www.alphavantage.co/query"
-        params = {
-            'function': 'TIME_SERIES_DAILY',
-            'symbol': ticker,
-            'outputsize': 'full',
-            'apikey': alpha_vantage_key,
-            'datatype': 'json'
-        }
-
-        for attempt in range(MAX_RETRIES):
-            try:
-                delay = (3 ** attempt) + random.uniform(1, 3)
-                if attempt > 0:
-                    logger.debug(f"{ticker}: Alpha Vantage 重试尝试 {attempt+1}/{MAX_RETRIES}，等待 {delay:.1f}s")
-                    time.sleep(delay)
-
-                resp = requests.get(url, params=params, timeout=30)
-
-                if resp.status_code == 200:
-                    data = resp.json()
-
-                    if 'Time Series (Daily)' not in data:
-                        if 'Note' in data:
-                            logger.debug(f"{ticker}: Alpha Vantage: {data['Note']}")
-                        elif 'Error Message' in data:
-                            logger.debug(f"{ticker}: Alpha Vantage: {data['Error Message']}")
-                        # Alpha Vantage rate limiting is 5/minute, 500/day for free
-                        time.sleep(15)
-                        continue
-
-                    ts_data = data['Time Series (Daily)']
-                    # Convert to DataFrame
-                    records = []
-                    for date_str, values in ts_data.items():
-                        records.append({
-                            'date': pd.to_datetime(date_str),
-                            'Open': float(values['1. open']),
-                            'High': float(values['2. high']),
-                            'Low': float(values['3. low']),
-                            'Close': float(values['4. close']),
-                            'Volume': float(values['5. volume'])
-                        })
-
-                    df = pd.DataFrame(records).set_index('date')
-                    df = df.sort_index()
-                    # Filter to our date range
-                    df = df[(df.index >= start_date) & (df.index <= end_date)]
-                    df = df.dropna()
-
-                    if len(df) >= MIN_DATA_DAYS:
-                        # 保存到智能缓存
-                        stock_cache.set_history(ticker, df, period1=period1, period2=period2)
-
-                        logger.debug(f"{ticker}: Alpha Vantage: ✓ 获取成功，{len(df)} 天数据")
-                        return df
-                    else:
-                        logger.debug(f"{ticker}: Alpha Vantage: 数据不足 ({len(df)} 天，需要至少 {MIN_DATA_DAYS})")
-                        continue
-                else:
-                    logger.debug(f"{ticker}: Alpha Vantage: HTTP {resp.status_code}")
-                    continue
-
-            except Exception as e:
-                logger.debug(f"{ticker}: Alpha Vantage: Error: {e} (attempt {attempt+1})")
-                continue
-
-    # All sources failed
-    logger.debug(f"{ticker}: 所有数据源都失败了")
+    # All retries failed
+    logger.debug(f"{ticker}: 所有 {MAX_RETRIES} 次尝试都失败了")
     return None
 
 def calculate_factors(df: pd.DataFrame) -> dict:
