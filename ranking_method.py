@@ -66,8 +66,8 @@ logger = logging.getLogger(__name__)
 # ============================================
 # TOP 100+ 美股科技股候选池
 # ============================================
-# TOP 50 Core Tech Stocks (default candidate pool)
-# 核心50只科技股票 - 最具代表性的科技巨头和高成长龙头
+# TOP 54 Core + Chinese Internet Tech Stocks (default candidate pool)
+# 核心54只科技股票 - 美股科技巨头 + 头部中概科技互联网
 TECH_TOP_50 = [
     # 科技巨头 (7)
     'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA',
@@ -83,6 +83,8 @@ TECH_TOP_50 = [
     'FSLR', 'ENPH', 'SEDG', 'RUN',
     # 金融科技/其他 (4)
     'COIN', 'UPST', 'SOFI', 'DELL',
+    # 中概科技互联网头部 (4)
+    'BABA', 'JD', 'PDD', 'TCEHY',
 ]
 
 # FULL LIST (140+ stocks - kept but not used by default)
