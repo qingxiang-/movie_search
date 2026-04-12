@@ -23,7 +23,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Configuration constants
-MAX_WORKERS = 5  # Maximum parallel workers for API calls (reduced to avoid Yahoo Finance rate limiting)
+MAX_WORKERS = 3  # Maximum parallel workers for API calls (reduced aggressively to avoid Yahoo Finance rate limiting)
 MAX_RETRIES = 3  # Maximum retries for failed requests
 MIN_DATA_DAYS = 100  # Minimum days of data required for analysis
 CACHE_DIR = Path.home() / ".cache" / "ranking_method" / "stock_data"
@@ -443,7 +443,7 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
 
 
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
-    """获取历史数据（使用yfinance改良版，带智能缓存和重试）"""
+    """获取历史数据（使用直接requests，带智能缓存和重试指数退避）"""
     import time
     import random
     from utils.data_cache import stock_cache
@@ -455,48 +455,79 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
         logger.debug(f"{ticker}: 从缓存获取历史数据")
         return cached_df
 
-    logger.debug(f"{ticker}: 从 Yahoo Finance 获取历史数据 (yfinance)")
-
-    # Convert timestamps to datetime for yfinance
-    start_date = datetime.fromtimestamp(period1)
-    end_date = datetime.fromtimestamp(period2)
+    logger.debug(f"{ticker}: 从 Yahoo Finance 获取历史数据")
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {
+        'period1': period1,
+        'period2': period2,
+        'interval': '1d',
+        'includePrePost': 'false',
+        'events': 'history'
+    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
     # Retry with exponential backoff
     for attempt in range(MAX_RETRIES):
         try:
             # Add random jitter to avoid synchronized requests
-            delay = (2 ** attempt) + random.random()
+            delay = (3 ** attempt) + random.uniform(1, 3)
             if attempt > 0:
                 logger.debug(f"{ticker}: 重试尝试 {attempt+1}/{MAX_RETRIES}，等待 {delay:.1f}s")
                 time.sleep(delay)
 
-            # Use yfinance library
-            import yfinance as yf
-            ticker_obj = yf.Ticker(ticker)
-            df = ticker_obj.history(start=start_date, end=end_date, interval='1d', auto_adjust=False)
+            resp = requests.get(url, params=params, headers=headers, timeout=20)
 
-            if df is not None and not df.empty:
-                # yfinance returns columns with capitalization, keep same format as before
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+            if resp.status_code == 200:
+                data = resp.json()
+                result = data['chart'].get('result')
+                if not result:
+                    logger.debug(f"{ticker}: No chart result (attempt {attempt+1})")
+                    time.sleep(random.uniform(1, 2))
+                    continue
+
+                df = pd.DataFrame({
+                    'Open': result[0]['indicators']['quote'][0]['open'],
+                    'High': result[0]['indicators']['quote'][0]['high'],
+                    'Low': result[0]['indicators']['quote'][0]['low'],
+                    'Close': result[0]['indicators']['quote'][0]['close'],
+                    'Volume': result[0]['indicators']['quote'][0]['volume']
+                }, index=pd.to_datetime(result[0]['timestamp'], unit='s'))
+
                 df = df.dropna()
 
                 if len(df) >= MIN_DATA_DAYS:
                     # 保存到智能缓存
                     stock_cache.set_history(ticker, df, period1=period1, period2=period2)
 
-                    # Add a small random delay after successful request
-                    time.sleep(random.uniform(0.3, 0.8))
+                    # Add a random delay after successful request to avoid rate limiting
+                    time.sleep(random.uniform(1, 2))
                     logger.debug(f"{ticker}: ✓ 获取成功，{len(df)} 天数据")
                     return df
                 else:
-                    logger.debug(f"{ticker}: 数据不足 ({len(df)} 天，需要至少 {MIN_DATA_DAYS})")
+                    logger.debug(f"{ticker}: 数据不足 ({len(df)} 天，需要至少 {MIN_DATA_DAYS}) (attempt {attempt+1})")
                     continue
+
+            elif resp.status_code == 429:
+                # Rate limited - need to backoff longer
+                logger.debug(f"{ticker}: Rate limited (429), backing off...")
+                time.sleep(delay * 3)
+                continue
             else:
-                logger.debug(f"{ticker}: 返回空数据 (attempt {attempt+1})")
+                logger.debug(f"{ticker}: HTTP {resp.status_code} (attempt {attempt+1})")
+                time.sleep(random.uniform(2, 4))
                 continue
 
+        except requests.exceptions.Timeout:
+            logger.debug(f"{ticker}: Request timeout (attempt {attempt+1})")
+            continue
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"{ticker}: Request error: {e} (attempt {attempt+1})")
+            continue
+        except (KeyError, IndexError, TypeError) as e:
+            logger.debug(f"{ticker}: Parse error: {e} (attempt {attempt+1})")
+            continue
         except Exception as e:
-            logger.debug(f"{ticker}: 异常: {e} (attempt {attempt+1})")
+            logger.debug(f"{ticker}: Unexpected error: {e} (attempt {attempt+1})")
             continue
 
     # All retries failed
