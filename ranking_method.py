@@ -442,12 +442,13 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
     return (ticker, None)
 
 
-# Rate limiting for yfinance - ensure <= 10 requests per minute
+# Rate limiting for Polygon.io - free tier: 5 requests/minute, 1 request/sec burst
 _last_request_time = 0
 _request_count_this_minute = 0
+_MAX_REQUESTS_PER_MINUTE = 5
 
 def _rate_limit_wait():
-    """Wait to ensure we don't exceed 10 requests per minute."""
+    """Wait to ensure we don't exceed max requests per minute for Polygon."""
     import time
     global _last_request_time, _request_count_this_minute
     current_time = time.time()
@@ -456,26 +457,25 @@ def _rate_limit_wait():
     if _last_request_time == 0 or current_time - _last_request_time >= 60:
         _request_count_this_minute = 0
         _last_request_time = current_time
-        return
-
-    # Check if we've exceeded 10 requests this minute
-    if _request_count_this_minute >= 10:
-        # Wait until the next minute
-        wait_time = 60 - (current_time - _last_request_time)
-        if wait_time > 0:
-            logger.info(f"⚠️  速率限制：已发送 {_request_count_this_minute} 请求/分钟，等待 {wait_time:.1f}s...")
-            time.sleep(wait_time)
-            _request_count_this_minute = 0
-            _last_request_time = time.time()
     else:
-        # Add small random spacing between requests
-        time.sleep(random.uniform(3, 8))
+        # Check if we've exceeded max requests this minute
+        if _request_count_this_minute >= _MAX_REQUESTS_PER_MINUTE:
+            # Wait until the next minute
+            wait_time = 60 - (current_time - _last_request_time)
+            if wait_time > 0:
+                logger.info(f"⚠️  Polygon 速率限制：已发送 {_request_count_this_minute} 请求/分钟，等待 {wait_time:.1f}s...")
+                time.sleep(wait_time)
+                _request_count_this_minute = 0
+                _last_request_time = time.time()
+
+    # Add random spacing between requests
+    time.sleep(random.uniform(10, 15))
 
     _request_count_this_minute += 1
     _last_request_time = current_time
 
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
-    """获取历史数据（使用yfinance，带速率限制保证≤10请求/分钟，智能缓存和重试）"""
+    """获取历史数据（使用Polygon.io，免费套餐提供2年完整历史数据，速率限制保证≤5请求/分钟）"""
     import time
     import random
     from utils.data_cache import stock_cache
@@ -487,11 +487,29 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
         logger.debug(f"{ticker}: 从缓存获取历史数据")
         return cached_df
 
-    logger.debug(f"{ticker}: 从 Yahoo Finance (yfinance) 获取历史数据")
+    # Get Polygon API key from environment
+    # You need to get a free key at: https://polygon.io/
+    polygon_key = os.getenv('POLYGON_API_KEY')
+    if not polygon_key:
+        logger.error(f"{ticker}: POLYGON_API_KEY not set in .env file")
+        return None
 
-    # Convert timestamps to datetime for yfinance
-    start_date = datetime.fromtimestamp(period1)
-    end_date = datetime.fromtimestamp(period2)
+    logger.debug(f"{ticker}: 从 Polygon.io 获取历史数据")
+
+    # Convert timestamps to dates in ISO format for Polygon
+    start_date_str = datetime.fromtimestamp(period1).strftime('%Y-%m-%d')
+    end_date_str = datetime.fromtimestamp(period2).strftime('%Y-%m-%d')
+    start_dt = datetime.fromtimestamp(period1)
+    end_dt = datetime.fromtimestamp(period2)
+
+    # Polygon.io API endpoint - aggregated daily data
+    # Free tier provides 2 years of historical data, which is enough for our 1-year request
+    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start_date_str}/{end_date_str}"
+    params = {
+        'adjusted': 'true',
+        'apiKey': polygon_key
+    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
     # Retry with exponential backoff
     for attempt in range(MAX_RETRIES):
@@ -499,36 +517,71 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
             # Enforce rate limiting before making request
             _rate_limit_wait()
 
-            # Use yfinance library
-            import yfinance as yf
-            ticker_obj = yf.Ticker(ticker)
-            df = ticker_obj.history(start=start_date, end=end_date, interval='1d', auto_adjust=False)
+            resp = requests.get(url, params=params, headers=headers, timeout=20)
 
-            if df is not None and not df.empty:
-                # yfinance returns columns with capitalization, keep same format as before
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+            if resp.status_code == 200:
+                data = resp.json()
+
+                if 'results' not in data or not data['results']:
+                    logger.debug(f"{ticker}: No results from Polygon (attempt {attempt+1})")
+                    if 'error' in data:
+                        logger.debug(f"{ticker}: Polygon error: {data['error']}")
+                    continue
+
+                # Convert to DataFrame
+                # Polygon uses millisecond timestamps: t/1000 to get seconds
+                records = []
+                for item in data['results']:
+                    records.append({
+                        'Open': item['o'],
+                        'High': item['h'],
+                        'Low': item['l'],
+                        'Close': item['c'],
+                        'Volume': item['v']
+                    })
+
+                df = pd.DataFrame(
+                    records,
+                    index=pd.to_datetime([item['t']/1000 for item in data['results']], unit='s')
+                )
                 df = df.dropna()
 
-                if len(df) >= MIN_DATA_DAYS:
-                    # 保存到智能缓存
-                    stock_cache.set_history(ticker, df, period1=period1, period2=period2)
+                # Filter to date range (should already be correct but just to be safe)
+                df = df[(df.index >= start_dt) & (df.index <= end_dt)]
 
-                    logger.debug(f"{ticker}: ✓ 获取成功，{len(df)} 天数据")
+                if len(df) >= MIN_DATA_DAYS:
+                    # Save to cache
+                    stock_cache.set_history(ticker, df, period1=period1, period2=period2)
+                    logger.debug(f"{ticker}: ✓ Polygon 获取成功，{len(df)} 天数据")
                     return df
                 else:
                     logger.debug(f"{ticker}: 数据不足 ({len(df)} 天，需要至少 {MIN_DATA_DAYS}) (attempt {attempt+1})")
                     continue
+
+            elif resp.status_code == 429:
+                # Rate limited
+                logger.debug(f"{ticker}: Polygon: Rate limited (429), waiting 65s...")
+                time.sleep(65)
+                continue
+            elif resp.status_code == 401 or resp.status_code == 403:
+                logger.debug(f"{ticker}: Polygon: Unauthorized - check API key")
+                return None
             else:
-                logger.debug(f"{ticker}: 返回空数据 (attempt {attempt+1})")
+                logger.debug(f"{ticker}: Polygon: HTTP {resp.status_code} (attempt {attempt+1})")
+                time.sleep(random.uniform(15, 30))
                 continue
 
+        except requests.exceptions.Timeout:
+            logger.debug(f"{ticker}: Request timeout (attempt {attempt+1})")
+            continue
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"{ticker}: Request error: {e} (attempt {attempt+1})")
+            continue
+        except (KeyError, IndexError, TypeError) as e:
+            logger.debug(f"{ticker}: Parse error: {e} (attempt {attempt+1})")
+            continue
         except Exception as e:
-            logger.debug(f"{ticker}: 异常: {e} (attempt {attempt+1})")
-            # Wait before retry
-            delay = (4 ** attempt) + random.uniform(5, 10)
-            if attempt < MAX_RETRIES - 1:
-                logger.debug(f"{ticker}: 等待 {delay:.1f}s 后重试...")
-                time.sleep(delay)
+            logger.debug(f"{ticker}: Unexpected error: {e} (attempt {attempt+1})")
             continue
 
     # All retries failed
