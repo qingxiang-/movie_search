@@ -430,7 +430,9 @@ def _fetch_stock_with_factors(ticker: str, period1: int, period2: int) -> tuple:
     Returns: (ticker, factors_dict) on success, (ticker, None) on failure.
     """
     df = get_stock_data(ticker, period1, period2)
-    if df is not None and len(df) > MIN_DATA_DAYS:
+    if df is not None and len(df) > 0:
+        if len(df) < MIN_DATA_DAYS:
+            logger.warning(f"{ticker}: 仅 {len(df)} 天数据（需要至少 {MIN_DATA_DAYS}）- 将继续使用")
         factors = calculate_factors(df)
         if factors:
             logger.debug(f"   {ticker}: ✓ {len(factors)} 因子")
@@ -450,6 +452,7 @@ _MAX_REQUESTS_PER_MINUTE = 5
 def _rate_limit_wait():
     """Wait to ensure we don't exceed max requests per minute for Alpha Vantage."""
     import time
+    import random
     global _last_request_time, _request_count_this_minute
     current_time = time.time()
 
@@ -545,6 +548,7 @@ def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
                 records = []
                 for date_str, values in ts_data.items():
                     records.append({
+                        'date': date_str,
                         'Open': float(values['1. open']),
                         'High': float(values['2. high']),
                         'Low': float(values['3. low']),
