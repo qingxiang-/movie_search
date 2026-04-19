@@ -58,7 +58,7 @@ class PerformanceTracker:
         Prepare archive data structure from result dataframe.
 
         Args:
-            df_result: Result dataframe from ranking_method
+            df_result: Result dataframe from alpha158_stock_screening
             top_n: Number of top stocks to archive
             llm_factors_used: Whether LLM factors were used
             factors_used: List of factors used in this run
@@ -148,7 +148,7 @@ class PerformanceTracker:
         """
         Fetch historical price for symbol at target date using cached data.
 
-        Uses the same Yahoo Finance API as ranking_method.
+        Uses the same data API as alpha158_stock_screening.
 
         Args:
             symbol: Stock symbol
@@ -157,7 +157,7 @@ class PerformanceTracker:
         Returns:
             Closing price at or near target date, or None if unavailable
         """
-        from ranking_method import get_stock_data
+        from alpha158_stock_screening import get_stock_data
 
         # Get data for a range that includes target_date
         start_date = target_date - timedelta(days=10)

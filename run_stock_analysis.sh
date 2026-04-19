@@ -24,7 +24,7 @@ export HTTP_PROXY="http://127.0.0.1:7890"
 export HTTPS_PROXY="http://127.0.0.1:7890"
 
 # Run the Alpha158 ranking method with Playwright news search
-$HOME/miniconda3/bin/python ranking_method.py >> "$LOG_FILE" 2>&1
+$HOME/miniconda3/bin/python alpha158_stock_screening.py >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?
 

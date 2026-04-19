@@ -2,7 +2,7 @@
 
 ## 修改内容
 
-### 1. `_get_top_stock_news` 函数 (ranking_method.py:571)
+### 1. `_get_top_stock_news` 函数 (alpha158_stock_screening.py:571)
 
 **修改前**: 仅获取通用新闻摘要
 **修改后**: 结合 Alpha 因子数据进行智能分析
@@ -18,7 +18,7 @@ def _get_top_stock_news(ticker: str, api_key: str, use_azure: bool = False,
 - Prompt 要求 LLM 基于因子数据进行量化角度的解读
 - 输出包含技术面分析、基本面分析和投资建议
 
-### 2. `_analyze_top_stocks_with_llm` 函数 (ranking_method.py:661)
+### 2. `_analyze_top_stocks_with_llm` 函数 (alpha158_stock_screening.py:661)
 
 **修改前**: 仅调用新闻获取，不传递因子数据
 **修改后**: 提取并传递 Alpha 因子数据
@@ -35,7 +35,7 @@ analysis = _get_top_stock_news(ticker, api_key, use_azure=use_azure, alpha_facto
 - `'analysis'` 替代了 `'news_summary'`
 - 新增 `'alpha_factors'` 字段
 
-### 3. `_generate_enhanced_html` 函数 (ranking_method.py:758)
+### 3. `_generate_enhanced_html` 函数 (alpha158_stock_screening.py:758)
 
 **修改前**: 显示"新闻与资讯"
 **修改后**: 显示"LLM 因子分析"
@@ -47,7 +47,7 @@ analysis = _get_top_stock_news(ticker, api_key, use_azure=use_azure, alpha_facto
 </div>
 ```
 
-### 4. 类型导入 (ranking_method.py:13)
+### 4. 类型导入 (alpha158_stock_screening.py:13)
 
 ```python
 from typing import Dict
@@ -123,7 +123,7 @@ python test_alpha158_llm.py
 ### 2. 完整流程测试
 
 ```bash
-python ranking_method.py
+python alpha158_stock_screening.py
 ```
 
 需要安装以下依赖:

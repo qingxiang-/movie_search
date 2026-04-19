@@ -29,7 +29,7 @@
 alpha158.py              # Core factor library
 ml_dataset_builder_v4.py # Dataset builder
 ml_train_sklearn.py      # ML training
-ranking_method.py        # Ranking strategy
+alpha158_stock_screening.py  # Alpha158 multi-factor stock ranking selection
 ranking_top20.csv       # Results
 ```
 
@@ -39,8 +39,8 @@ ranking_top20.csv       # Results
 # Install dependencies
 pip install pandas pandas-ta scikit-learn xgboost
 
-# Run ranking method
-python ranking_method.py
+# Run Alpha158 multi-factor stock screening
+python alpha158_stock_screening.py
 
 # Train ML model
 python ml_train_sklearn.py

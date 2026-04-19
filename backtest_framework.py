@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 
 from utils.performance_metrics import calculate_all_metrics, calculate_drawdown_curve
-from ranking_method import _fetch_all_stock_factors, _calculate_factor_weights, _calculate_scores_and_rank
+from alpha158_stock_screening import _fetch_all_stock_factors, _calculate_factor_weights, _calculate_scores_and_rank
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ class BacktestFramework:
         period2 = int(rebalance_date.timestamp())
         period1 = int((rebalance_date - timedelta(days=lookback_days)).timestamp())
 
-        from ranking_method import get_stock_data, calculate_factors
+        from alpha158_stock_screening import get_stock_data, calculate_factors
 
         try:
             df = get_stock_data(symbol, period1, period2)
@@ -171,7 +171,7 @@ class BacktestFramework:
         Returns:
             (period_return, price_dict)
         """
-        from ranking_method import get_stock_data
+        from alpha158_stock_screening import get_stock_data
 
         n_stocks = len(selected_stocks)
         if n_stocks == 0:
@@ -354,7 +354,7 @@ class BacktestFramework:
         end_date: datetime
     ) -> Optional[Dict]:
         """Get benchmark (SPY S&P 500 ETF) performance for same period."""
-        from ranking_method import get_stock_data
+        from alpha158_stock_screening import get_stock_data
 
         try:
             period1 = int(start_date.timestamp())
@@ -623,7 +623,7 @@ def get_sp500_returns(
     end_date: datetime
 ) -> pd.DataFrame:
     """Get SPY (S&P 500 ETF) daily returns for benchmark."""
-    from ranking_method import get_stock_data
+    from alpha158_stock_screening import get_stock_data
 
     period1 = int(start_date.timestamp())
     period2 = int(end_date.timestamp())
@@ -650,7 +650,7 @@ if __name__ == "__main__":
     )
 
     # Use default TECH_100 stock pool
-    from ranking_method import TECH_100
+    from alpha158_stock_screening import TECH_100
     stock_pool = TECH_100
     if args.stock_pool:
         import pandas as pd

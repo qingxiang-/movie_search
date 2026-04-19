@@ -96,15 +96,15 @@ python damai_search.py --categories 演唱会,话剧
 **使用方法**:
 ```bash
 pip install pandas pandas-ta scikit-learn xgboost
-python ranking_method.py  # 使用传统方法
-python ranking_method.py --use-llm-factor  # 使用LLM增强模式（集成LLM预测因子）
+python alpha158_stock_screening.py  # 使用传统方法
+python alpha158_stock_screening.py --use-llm-factor  # 使用LLM增强模式（集成LLM预测因子）
 python ml_train_sklearn.py
 ```
 
 **命令行选项**:
 ```bash
-python ranking_method.py --help  # 查看所有选项
-python ranking_method.py --use-llm-factor --period-days 60 --stock-pool my_stock_pool.csv
+python alpha158_stock_screening.py --help  # 查看所有选项
+python alpha158_stock_screening.py --use-llm-factor --period-days 60 --stock-pool my_stock_pool.csv
 ```
 
 ## 开发最佳实践
@@ -218,13 +218,13 @@ python stock_search.py
 python damai_search.py --categories 演唱会,话剧
 
 # 选股系统（传统方法）
-python ranking_method.py
+python alpha158_stock_screening.py
 
 # 选股系统（LLM增强模式）
-python ranking_method.py --use-llm-factor
+python alpha158_stock_screening.py --use-llm-factor
 
 # 选股系统（自定义参数）
-python ranking_method.py --use-llm-factor --period-days 60 --stock-pool my_stock_pool.csv
+python alpha158_stock_screening.py --use-llm-factor --period-days 60 --stock-pool my_stock_pool.csv
 
 # 机器学习训练
 python ml_train_sklearn.py
@@ -294,7 +294,7 @@ movie_search/
 ├── alpha158.py                     # Alpha158因子库（基础版）
 ├── alpha158_enhanced.py            # Alpha158因子库（增强版）
 ├── alpha158_lite.py                # Alpha158因子库（轻量级）
-├── ranking_method.py               # 选股策略
+├── alpha158_stock_screening.py     # Alpha158多因子选股策略
 ├── ml_train_sklearn.py             # 机器学习训练
 ├── ml_dataset_builder_v4.py        # 数据集构建
 ├── requirements.txt                # 依赖项
