@@ -674,6 +674,26 @@ def get_momentum(row, default=0):
                 return val
     return default
 
+def winsorize(series: pd.Series, quantile_low: float = 0.01, quantile_high: float = 0.99) -> pd.Series:
+    """
+    Winsorize 处理：对因子做首尾截尾，消除极端离群值影响。
+    极端值会严重影响Z-score计算，截尾后模型更稳定。
+
+    Args:
+        series: 输入因子序列
+        quantile_low: 下分位数，低于此值被截断
+        quantile_high: 上分位数，高于此值被截断
+
+    Returns:
+        截断后的序列
+    """
+    if len(series.dropna()) <= 2:
+        return series
+    q_low = series.quantile(quantile_low)
+    q_high = series.quantile(quantile_high)
+    return series.clip(q_low, q_high)
+
+
 def zscore_normalize(series: pd.Series) -> pd.Series:
     """Z-score 标准化"""
     mean = series.mean()
@@ -688,10 +708,17 @@ def calculate_composite_score(df_factors: pd.DataFrame, factor_weights: dict) ->
     """计算综合得分"""
     scores = pd.Series(0.0, index=df_factors.index)
 
+    # 权重归一化：总权重绝对值归一化为1，提升得分解释性
+    total_abs_weight = sum(abs(w) for w in factor_weights.values())
+    if total_abs_weight > 0:
+        factor_weights = {k: v / total_abs_weight for k, v in factor_weights.items()}
+
     for factor, weight in factor_weights.items():
         if factor in df_factors.columns:
             values = df_factors[factor].copy()
             values = values.fillna(values.median())
+            # Winsorize: 截断极端离群值，提升模型稳定性
+            values = winsorize(values, 0.01, 0.99)
             z_values = zscore_normalize(values)
             scores += z_values * weight
 
