@@ -450,10 +450,14 @@ _request_count_this_minute = 0
 _MAX_REQUESTS_PER_MINUTE = 5
 
 def _rate_limit_wait():
-    """Wait to ensure we don't exceed max requests per minute for Alpha Vantage."""
+    """Wait to ensure we don't exceed max requests per minute for Alpha Vantage.
+    Free tier: 5 requests per minute, 500 requests per day.
+    """
     import time
     import random
     global _last_request_time, _request_count_this_minute
+
+    # Check and wait before incrementing counter
     current_time = time.time()
 
     # Reset counter if more than a minute has passed
@@ -471,11 +475,12 @@ def _rate_limit_wait():
                 _request_count_this_minute = 0
                 _last_request_time = time.time()
 
-    # Add random spacing between requests
+    # Add random spacing between requests (10-15 seconds) to avoid burst
     time.sleep(random.uniform(10, 15))
 
+    # Increment counter after waiting
     _request_count_this_minute += 1
-    _last_request_time = current_time
+    _last_request_time = time.time()
 
 def get_stock_data(ticker: str, period1: int, period2: int) -> pd.DataFrame:
     """获取历史数据（使用Alpha Vantage，从环境变量读取API key，速率限制保证≤5请求/分钟）"""
@@ -1761,7 +1766,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Alpha158 多因子选股系统")
     parser.add_argument("--stock-pool", type=str, help="股票池文件路径（CSV 格式）")
-    parser.add_argument("--period-days", type=int, default=252, help="时间周期（天数）")
+    parser.add_argument("--period-days", type=int, default=100, help="时间周期（天数）- Alpha Vantage免费版提供约100天数据")
     parser.add_argument("--use-trading-days", action="store_true", help="将 period-days 视为交易日而非日历日")
     parser.add_argument("--use-llm-factor", action="store_true", help="启用 LLM 预测因子集成（将 LLM 预测作为额外因子加入排名）")
     parser.add_argument("--no-archive", action="store_true", help="不存档推荐结果（跳过历史表现跟踪）")
