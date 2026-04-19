@@ -32,11 +32,12 @@ class LLMClient:
         # Azure OpenAI 客户端 (延迟初始化)
         self._azure_client = None
 
-        # Qwen 配置
-        self.base_url = base_url or os.getenv("DASHSCOPE_BASE_URL",
+        # Qwen/OpenAI-compatible configuration
+        # Parameters override environment variables
+        self.base_url = base_url if base_url is not None else os.getenv("DASHSCOPE_BASE_URL",
                                                "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY", "")
-        self.model = model or os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
+        self.api_key = api_key if api_key is not None else os.getenv("DASHSCOPE_API_KEY", "")
+        self.model = model if model is not None else os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
 
         self.http_client = httpx.AsyncClient(timeout=timeout)
 
@@ -100,18 +101,14 @@ class LLMClient:
                 content = response.choices[0].message.content
                 return {"success": True, "content": content}
             else:
-                # 调用 Qwen API
-                base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-                api_key = os.getenv("DASHSCOPE_API_KEY", "")
-                model = os.getenv("DASHSCOPE_MODEL", "qwen-flash-2025-07-28")
-                
-                url = f"{base_url}/chat/completions"
+                # 调用 Qwen/OpenAI-compatible API
+                url = f"{self.base_url}/chat/completions"
                 headers = {
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 }
                 data = {
-                    "model": model,
+                    "model": self.model,
                     "messages": messages,
                     "temperature": temperature,
                 }
