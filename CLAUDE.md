@@ -96,15 +96,15 @@ python damai_search.py --categories 演唱会,话剧
 **使用方法**:
 ```bash
 pip install pandas pandas-ta scikit-learn xgboost
-python ranking_method.py  # 使用传统API方法
-python ranking_method.py --use-mcp  # 使用MCP增强模式
+python ranking_method.py  # 使用传统方法
+python ranking_method.py --use-llm-factor  # 使用LLM增强模式（集成LLM预测因子）
 python ml_train_sklearn.py
 ```
 
 **命令行选项**:
 ```bash
 python ranking_method.py --help  # 查看所有选项
-python ranking_method.py --use-mcp --period-days 60 --stock-pool my_stock_pool.csv
+python ranking_method.py --use-llm-factor --period-days 60 --stock-pool my_stock_pool.csv
 ```
 
 ## 开发最佳实践
@@ -217,14 +217,14 @@ python stock_search.py
 # 大麦网搜索
 python damai_search.py --categories 演唱会,话剧
 
-# 选股系统（传统API方法）
+# 选股系统（传统方法）
 python ranking_method.py
 
-# 选股系统（MCP增强模式）
-python ranking_method.py --use-mcp
+# 选股系统（LLM增强模式）
+python ranking_method.py --use-llm-factor
 
 # 选股系统（自定义参数）
-python ranking_method.py --use-mcp --period-days 60 --stock-pool my_stock_pool.csv
+python ranking_method.py --use-llm-factor --period-days 60 --stock-pool my_stock_pool.csv
 
 # 机器学习训练
 python ml_train_sklearn.py
